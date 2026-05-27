@@ -995,6 +995,8 @@ select option{background:#1a1f2e;color:#e8ecf4}
         </tbody>
       </table>
     </div>
+  </div><!-- /table-card -->
+
   <!-- Stores Without Sales Entry -->
   <div class="missing-card" id="missingCard" style="display:none">
     <div class="missing-header">

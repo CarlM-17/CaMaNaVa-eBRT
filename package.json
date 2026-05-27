@@ -1,0 +1,20 @@
+{
+  "name": "camanava-ebrt",
+  "version": "1.0.0",
+  "description": "CaMaNaVa eBRT - Daily Sales Report Dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "googleapis": "^140.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

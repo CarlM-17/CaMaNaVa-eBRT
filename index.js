@@ -10,15 +10,13 @@ app.use(express.json());
 const SHEET_ID = process.env.SHEET_ID || '1PhRyLx2viByS1J-dOWWPwSmAZwNwzzaM6ATmbpQIR8w';
 const SHEET_NAME = 'DailySales';
 const DATA_RANGE = `${SHEET_NAME}!A23:R`;
+const STORE_LIST_RANGE = 'ListOfStores!A:E';
 
 function getAuthClient() {
-  let credentials;
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  } else {
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON env variable is not set');
   }
-
+  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   return new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
@@ -41,18 +39,49 @@ function parseDate(s) {
   return null;
 }
 
+// ─── Cache the master store list (refreshes every 5 min) ─────────────────────
+let storeListCache = null;
+let storeListCacheTime = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getMasterStoreList(sheets) {
+  const now = Date.now();
+  if (storeListCache && (now - storeListCacheTime) < CACHE_TTL) {
+    return storeListCache;
+  }
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: STORE_LIST_RANGE,
+  });
+  const rows = response.data.values || [];
+  // Skip header rows - find rows where col C is a numeric Store ID
+  const stores = rows
+    .map(r => ({
+      region:    (r[0] || '').trim(),
+      area:      (r[1] || '').trim(),
+      storeId:   (r[2] || '').trim(),
+      storeName: (r[3] || '').trim(),
+      remarks:   (r[4] || '').trim(),
+    }))
+    .filter(s => s.storeId && /^\d+$/.test(s.storeId) && s.storeName);
+
+  storeListCache = stores;
+  storeListCacheTime = now;
+  return stores;
+}
+
 // ─── API: GET /api/sales ─────────────────────────────────────────────────────
 app.get('/api/sales', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: DATA_RANGE,
-    });
+    const [salesResp, masterStores] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: DATA_RANGE }),
+      getMasterStoreList(sheets),
+    ]);
 
-    const rows = response.data.values || [];
+    const rows = salesResp.data.values || [];
 
     let data = rows
       .map((r) => ({
@@ -77,22 +106,22 @@ app.get('/api/sales', async (req, res) => {
       .filter((r) => r.date && r.storeName);
 
     const { date, area, store } = req.query;
-    if (date) data = data.filter((r) => r.date === date);
-    if (area && area !== 'ALL') data = data.filter((r) => r.area === area);
-    if (store && store !== 'ALL') data = data.filter((r) => r.storeName === store);
+    let filtered = data;
+    if (date) filtered = filtered.filter((r) => r.date === date);
+    if (area && area !== 'ALL') filtered = filtered.filter((r) => r.area === area);
+    if (store && store !== 'ALL') filtered = filtered.filter((r) => r.storeName === store);
 
+    // Aggregate sales per store
     const storeMap = {};
-    data.forEach((r) => {
+    filtered.forEach((r) => {
       const key = `${r.storeId}_${r.storeName}`;
       if (!storeMap[key]) {
         storeMap[key] = {
           storeId: r.storeId,
           storeName: r.storeName,
           area: r.area,
-          sales: 0,
-          salesLY: 0,
-          trx: 0,
-          trxLY: 0,
+          sales: 0, salesLY: 0,
+          trx: 0, trxLY: 0,
           justifications: [],
         };
       }
@@ -122,7 +151,34 @@ app.get('/api/sales', async (req, res) => {
       })
       .sort((a, b) => b.sales - a.sales);
 
-    res.json({ success: true, count: result.length, rows: result });
+    // ── Calculate missing stores (only meaningful when filtering by date) ──
+    // For each store in the master list that isn't in the filtered sales data
+    const reportedStoreIds = new Set(result.map(r => r.storeId));
+    let missing = [];
+    if (date) {
+      // Pool of stores to check: respect area & store filters
+      let pool = masterStores;
+      if (area && area !== 'ALL') pool = pool.filter(s => s.area === area);
+      if (store && store !== 'ALL') pool = pool.filter(s => s.storeName === store);
+      missing = pool
+        .filter(s => !reportedStoreIds.has(s.storeId))
+        .map(s => ({
+          storeId: s.storeId,
+          storeName: s.storeName,
+          area: s.area,
+          region: s.region,
+          remarks: s.remarks,
+        }))
+        .sort((a, b) => a.storeName.localeCompare(b.storeName));
+    }
+
+    res.json({
+      success: true,
+      count: result.length,
+      rows: result,
+      missing,
+      totalMasterStores: masterStores.length,
+    });
   } catch (err) {
     console.error('Sheets API error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -134,24 +190,17 @@ app.get('/api/filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
+    const masterStores = await getMasterStoreList(sheets);
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: DATA_RANGE,
-    });
-
-    const rows = response.data.values || [];
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
 
-    rows.forEach((r) => {
-      const area = (r[5] || '').trim();
-      const store = (r[7] || '').trim();
-      if (area) areas.add(area);
-      if (store) {
-        if (!filterArea || filterArea === 'ALL' || area === filterArea) {
-          stores.add(store);
+    masterStores.forEach((s) => {
+      if (s.area) areas.add(s.area);
+      if (s.storeName) {
+        if (!filterArea || filterArea === 'ALL' || s.area === filterArea) {
+          stores.add(s.storeName);
         }
       }
     });
@@ -167,12 +216,8 @@ app.get('/api/filters', async (req, res) => {
   }
 });
 
-// ─── Health check ────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// ─── Serve the frontend (embedded HTML) ──────────────────────────────────────
 const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -543,6 +588,86 @@ tbody tr:hover td{background:rgba(99,102,241,0.04)}
 }
 .summary-row .num{font-size:13.5px;font-weight:700}
 
+/* ── Missing Stores card ── */
+.missing-card{
+  margin-top:24px;
+  background:linear-gradient(180deg, rgba(245,158,11,0.06) 0%, rgba(20,26,42,0.65) 60%);
+  backdrop-filter:blur(20px) saturate(180%);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  border:1px solid rgba(245,158,11,0.22);
+  border-radius:18px;overflow:hidden;position:relative;
+  animation:fadeInUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.5s backwards;
+}
+.missing-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg, transparent, var(--amber), var(--amber2), transparent);
+  opacity:0.7;
+}
+.missing-card.empty-state{
+  background:linear-gradient(180deg, rgba(16,185,129,0.05) 0%, rgba(20,26,42,0.65) 60%);
+  border-color:rgba(16,185,129,0.22);
+}
+.missing-card.empty-state::before{
+  background:linear-gradient(90deg, transparent, var(--emerald), var(--emerald2), transparent);
+}
+.missing-header{
+  padding:18px 24px;border-bottom:1px solid var(--border-soft);
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+}
+.missing-title{
+  font-family:'Space Grotesk',sans-serif;
+  font-size:14px;font-weight:600;color:var(--text-1);
+  display:flex;align-items:center;gap:10px;letter-spacing:-0.01em;
+}
+.missing-title i{
+  color:var(--amber2);font-size:13px;
+  width:28px;height:28px;border-radius:8px;
+  background:rgba(245,158,11,0.15);
+  display:flex;align-items:center;justify-content:center;
+}
+.missing-card.empty-state .missing-title i{
+  color:var(--emerald2);background:rgba(16,185,129,0.15);
+}
+.missing-count{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:24px;height:22px;padding:0 8px;border-radius:11px;
+  background:linear-gradient(135deg, var(--amber), var(--amber2));
+  color:#fff;font-size:11px;font-weight:700;
+  font-family:'JetBrains Mono',monospace;
+  box-shadow:0 2px 8px -2px var(--amber-glow);
+}
+.missing-card.empty-state .missing-count{
+  background:linear-gradient(135deg, var(--emerald), var(--emerald2));
+  box-shadow:0 2px 8px -2px var(--emerald-glow);
+}
+.missing-sub{font-size:11.5px;color:var(--text-3);font-weight:500}
+.missing-table th{
+  background:rgba(245,158,11,0.05);
+  color:var(--amber2);
+}
+.remark-pill{
+  display:inline-flex;align-items:center;
+  padding:4px 10px;border-radius:8px;
+  font-size:11px;font-weight:600;font-family:'JetBrains Mono',monospace;
+  letter-spacing:-0.01em;
+}
+.remark-pill.organic{background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:var(--emerald2)}
+.remark-pill.new{background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.3);color:var(--indigo2)}
+.remark-pill.other{background:rgba(148,163,200,0.08);border:1px solid var(--border-strong);color:var(--text-3)}
+.all-reported{
+  padding:50px 20px;text-align:center;color:var(--text-2);
+}
+.all-reported-icon{
+  width:64px;height:64px;border-radius:18px;margin:0 auto 16px;
+  background:linear-gradient(135deg, rgba(16,185,129,0.15), rgba(52,211,153,0.15));
+  border:1px solid rgba(16,185,129,0.3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:24px;color:var(--emerald2);
+  box-shadow:0 0 24px -8px var(--emerald-glow);
+}
+.all-reported-title{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;color:var(--emerald2);margin-bottom:6px}
+.all-reported-sub{font-size:12px;color:var(--text-3);font-weight:500}
+
 /* ── Empty / Error states ── */
 .empty-cell{text-align:center;padding:64px 20px;color:var(--text-3)}
 .empty-icon{
@@ -732,6 +857,30 @@ tbody tr:hover td{background:rgba(99,102,241,0.04)}
         </tbody>
       </table>
     </div>
+  <!-- Stores Without Sales Entry -->
+  <div class="missing-card" id="missingCard" style="display:none">
+    <div class="missing-header">
+      <div class="missing-title">
+        <i class="fa fa-triangle-exclamation"></i>
+        Stores Without Sales Entry
+        <span class="missing-count" id="missingCount">0</span>
+      </div>
+      <div class="missing-sub">Based on Store ID vs ListOfStores</div>
+    </div>
+    <div class="table-wrap">
+      <table class="missing-table">
+        <thead>
+          <tr>
+            <th>Store ID</th>
+            <th>Store Name</th>
+            <th>Area</th>
+            <th>Region</th>
+            <th>Remarks</th>
+          </tr>
+        </thead>
+        <tbody id="missingBody"></tbody>
+      </table>
+    </div>
   </div>
 
 </main>
@@ -846,6 +995,7 @@ async function applyFilters() {
     renderKPIs(rows);
     renderTable(rows);
     renderCharts(rows);
+    renderMissing(json.missing || [], !!date);
     setStatus('live', 'Live');
   } catch(e) {
     console.error(e);
@@ -1060,6 +1210,61 @@ function renderCharts(rows) {
   });
 }
 
+function renderMissing(missing, hasDateFilter) {
+  const card = document.getElementById('missingCard');
+  const body = document.getElementById('missingBody');
+  const countEl = document.getElementById('missingCount');
+
+  // Only show this section when a specific date is selected
+  if (!hasDateFilter) {
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'block';
+  countEl.textContent = missing.length;
+
+  if (!missing.length) {
+    card.classList.add('empty-state');
+    body.innerHTML = \`<tr><td colspan="5" style="padding:0">
+      <div class="all-reported">
+        <div class="all-reported-icon"><i class="fa fa-circle-check"></i></div>
+        <div class="all-reported-title">All Stores Reported</div>
+        <div class="all-reported-sub">Every store in the master list has a sales entry for this date</div>
+      </div>
+    </td></tr>\`;
+    return;
+  }
+
+  card.classList.remove('empty-state');
+
+  body.innerHTML = missing.map(s => {
+    const color = AREA_COLORS[s.area] || DEFAULT_COLOR;
+    const grad  = AREA_GRADIENTS[s.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const remarkLower = (s.remarks || '').toLowerCase();
+    const remarkCls = remarkLower === 'organic' ? 'organic' : remarkLower === 'new' ? 'new' : 'other';
+    return \`<tr>
+      <td><span class="num num-bold" style="color:var(--text-1)">#\${s.storeId}</span></td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]})">\${initials(s.storeName)}</div>
+          <div class="store-info">
+            <div class="store-name">\${s.storeName || '—'}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        <span class="area-tag">
+          <span class="area-dot" style="background:\${color};color:\${color}"></span>
+          \${s.area || '—'}
+        </span>
+      </td>
+      <td><span style="font-size:12px;color:var(--text-2);font-weight:500">\${s.region || '—'}</span></td>
+      <td><span class="remark-pill \${remarkCls}">\${s.remarks || '—'}</span></td>
+    </tr>\`;
+  }).join('');
+}
+
 function setStatus(type, text) {
   const b = document.getElementById('statusBadge');
   b.className = 'badge ' + (type==='live' ? 'live' : type==='error' ? 'error' : 'loading-badge');
@@ -1089,12 +1294,9 @@ app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(HTML);
 });
-
 app.get('*', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(HTML);
 });
 
-app.listen(PORT, () => {
-  console.log(`CaMaNaVa eBRT running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`CaMaNaVa eBRT running on port ${PORT}`));

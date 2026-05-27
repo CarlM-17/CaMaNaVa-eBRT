@@ -678,7 +678,8 @@ tbody tr:hover td{background:rgba(99,102,241,0.04)}
 }
 .tab-btn i{font-size:13px}
 .tab-content{display:none !important}
-.tab-content.active{display:block !important;animation:fadeInUp 0.4s cubic-bezier(0.4,0,0.2,1)}
+.tab-content.active{display:block !important}
+.tab-content.active > *{opacity:1 !important}
 
 /* Style native select options for dark theme */
 select option{background:#1a1f2e;color:#e8ecf4}
@@ -730,7 +731,6 @@ select option{background:#1a1f2e;color:#e8ecf4}
   -webkit-backdrop-filter:blur(20px) saturate(180%);
   border:1px solid rgba(245,158,11,0.22);
   border-radius:18px;overflow:hidden;position:relative;
-  animation:fadeInUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.5s backwards;
 }
 .missing-card::before{
   content:'';position:absolute;top:0;left:0;right:0;height:1px;
@@ -852,16 +852,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
   from{opacity:0;transform:translateY(8px)}
   to{opacity:1;transform:translateY(0)}
 }
-.tab-content.active .kpi,.tab-content.active .chart-card,.tab-content.active .table-card,.tab-content.active .controls{animation:fadeInUp 0.5s cubic-bezier(0.4,0,0.2,1) backwards}
-.tab-content.active .controls{animation-delay:0.05s}
-.tab-content.active .kpi:nth-child(1){animation-delay:0.1s}
-.tab-content.active .kpi:nth-child(2){animation-delay:0.15s}
-.tab-content.active .kpi:nth-child(3){animation-delay:0.2s}
-.tab-content.active .kpi:nth-child(4){animation-delay:0.25s}
-.tab-content.active .kpi:nth-child(5){animation-delay:0.3s}
-.tab-content.active .chart-card:nth-child(1){animation-delay:0.35s}
-.tab-content.active .chart-card:nth-child(2){animation-delay:0.4s}
-.tab-content.active .table-card{animation-delay:0.45s}
+/* Animations disabled to prevent visibility issues on tab switch */
 </style>
 </head>
 <body>

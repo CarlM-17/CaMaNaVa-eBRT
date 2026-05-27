@@ -212,9 +212,9 @@ app.get('/api/monthly', async (req, res) => {
     const data = await getSalesData(sheets);
 
     const { month, area, store, sign } = req.query;
-    if (!month) return res.json({ success: true, summary: [], detail: [], trend: [] });
 
-    let filtered = data.filter(r => monthKey(r.date) === month);
+    let filtered = data;
+    if (month) filtered = filtered.filter(r => monthKey(r.date) === month);
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
@@ -677,8 +677,11 @@ tbody tr:hover td{background:rgba(99,102,241,0.04)}
   border:1px solid rgba(99,102,241,0.35);
 }
 .tab-btn i{font-size:13px}
-.tab-content{display:none}
-.tab-content.active{display:block;animation:fadeInUp 0.4s cubic-bezier(0.4,0,0.2,1)}
+.tab-content{display:none !important}
+.tab-content.active{display:block !important;animation:fadeInUp 0.4s cubic-bezier(0.4,0,0.2,1)}
+
+/* Style native select options for dark theme */
+select option{background:#1a1f2e;color:#e8ecf4}
 
 /* ── Export button ── */
 .export-btn{
@@ -849,16 +852,16 @@ tbody tr:hover td{background:rgba(99,102,241,0.04)}
   from{opacity:0;transform:translateY(8px)}
   to{opacity:1;transform:translateY(0)}
 }
-.kpi,.chart-card,.table-card,.controls{animation:fadeInUp 0.5s cubic-bezier(0.4,0,0.2,1) backwards}
-.controls{animation-delay:0.05s}
-.kpi:nth-child(1){animation-delay:0.1s}
-.kpi:nth-child(2){animation-delay:0.15s}
-.kpi:nth-child(3){animation-delay:0.2s}
-.kpi:nth-child(4){animation-delay:0.25s}
-.kpi:nth-child(5){animation-delay:0.3s}
-.chart-card:nth-child(1){animation-delay:0.35s}
-.chart-card:nth-child(2){animation-delay:0.4s}
-.table-card{animation-delay:0.45s}
+.tab-content.active .kpi,.tab-content.active .chart-card,.tab-content.active .table-card,.tab-content.active .controls{animation:fadeInUp 0.5s cubic-bezier(0.4,0,0.2,1) backwards}
+.tab-content.active .controls{animation-delay:0.05s}
+.tab-content.active .kpi:nth-child(1){animation-delay:0.1s}
+.tab-content.active .kpi:nth-child(2){animation-delay:0.15s}
+.tab-content.active .kpi:nth-child(3){animation-delay:0.2s}
+.tab-content.active .kpi:nth-child(4){animation-delay:0.25s}
+.tab-content.active .kpi:nth-child(5){animation-delay:0.3s}
+.tab-content.active .chart-card:nth-child(1){animation-delay:0.35s}
+.tab-content.active .chart-card:nth-child(2){animation-delay:0.4s}
+.tab-content.active .table-card{animation-delay:0.45s}
 </style>
 </head>
 <body>
@@ -1588,7 +1591,7 @@ async function initMonthlyTab() {
 
     // Populate month dropdown
     const mSel = document.getElementById('mMonthFilter');
-    mSel.innerHTML = '';
+    mSel.innerHTML = '<option value="ALL">All Months</option>';
     mMonthFilters.months.forEach(m => {
       const o = document.createElement('option');
       o.value = m.value;
@@ -1657,7 +1660,7 @@ async function applyMonthlyFilters() {
   if (!month) return;
 
   const params = new URLSearchParams();
-  params.set('month', month);
+  if (month !== 'ALL') params.set('month', month);
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
   if (mSignFilter !== 'ALL') params.set('sign', mSignFilter);
@@ -1676,7 +1679,7 @@ async function applyMonthlyFilters() {
     document.getElementById('mRecordsCount').innerHTML =
       \`<span>\${summary.length}</span> store\${summary.length!==1?'s':''} · <span>\${detail.length}</span> detail row\${detail.length!==1?'s':''}\`;
 
-    const monthLabel = (mMonthFilters.months.find(m => m.value === month) || {}).label || month;
+    const monthLabel = month === 'ALL' ? 'All Months' : ((mMonthFilters.months.find(m => m.value === month) || {}).label || month);
     document.getElementById('mTableDate').textContent = monthLabel;
 
     renderMKPIs(summary);

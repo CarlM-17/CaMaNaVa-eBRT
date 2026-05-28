@@ -615,6 +615,7 @@ td{
   vertical-align:middle;white-space:nowrap;
   font-size:13px;
 }
+td:has(.just-full){white-space:normal}
 tr:last-child td{border-bottom:none}
 tbody tr{transition:background .15s}
 tbody tr:hover td{background:rgba(99,102,241,0.04)}
@@ -1084,7 +1085,11 @@ select option{background:#1a1f2e;color:#e8ecf4}
       <div class="kpi k-stores">
         <div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Active Stores</div>
         <div class="kpi-value gradient-text" id="m-kpi-stores">—</div>
-        <div class="kpi-sub">with sales data</div>
+        <div class="kpi-sub" id="m-kpi-stores-sub" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <span style="display:inline-flex;align-items:center;gap:4px"><i class="fa fa-arrow-up" style="color:#34d399;font-size:10px"></i> <span id="m-kpi-up" style="color:#34d399;font-weight:600;font-family:'JetBrains Mono',monospace">0</span> growth</span>
+          <span style="color:var(--text-dim)">·</span>
+          <span style="display:inline-flex;align-items:center;gap:4px"><i class="fa fa-arrow-down" style="color:#fb7185;font-size:10px"></i> <span id="m-kpi-down" style="color:#fb7185;font-weight:600;font-family:'JetBrains Mono',monospace">0</span> decline</span>
+        </div>
       </div>
     </div>
 
@@ -1403,7 +1408,7 @@ function renderTable(rows) {
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(r.salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctStr}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:\${diffColor}">\${r.diffVal >= 0 ? '+' : ''}\${fmtFull(r.diffVal)}</span></td>
-      <td><div class="just-cell" title="\${just}">\${just}</div></td>
+      <td><div class="just-full">\${just}</div></td>
     </tr>\`;
   }).join('');
 
@@ -1740,6 +1745,12 @@ function renderMKPIs(rows) {
   document.getElementById('m-kpi-diff-icon').style.background = \`linear-gradient(135deg, \${totDiff>=0?'#06b6d4':'#f43f5e'}, \${totDiff>=0?'#22d3ee':'#fb7185'})\`;
 
   document.getElementById('m-kpi-stores').textContent = active;
+
+  // Growth vs decline counts
+  const growth  = rows.filter(r => (r.sales - r.salesLY) > 0).length;
+  const decline = rows.filter(r => (r.sales - r.salesLY) < 0).length;
+  document.getElementById('m-kpi-up').textContent = growth;
+  document.getElementById('m-kpi-down').textContent = decline;
 }
 
 function renderMSummary(rows) {

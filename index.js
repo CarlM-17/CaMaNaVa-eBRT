@@ -595,6 +595,21 @@ th{
   white-space:nowrap;border-bottom:1px solid var(--border-soft);
   position:sticky;top:0;z-index:5;
 }
+th.sortable{
+  cursor:pointer;user-select:none;
+  transition:color .15s, background .15s;
+  position:sticky;top:0;z-index:5;
+}
+th.sortable:hover{color:var(--indigo2);background:rgba(99,102,241,0.06)}
+th.sortable .sort-icon{
+  display:inline-block;margin-left:5px;font-size:9px;
+  opacity:0.35;transition:opacity .15s;color:var(--text-3);
+}
+th.sortable:hover .sort-icon{opacity:0.6}
+th.sortable.sort-asc .sort-icon,
+th.sortable.sort-desc .sort-icon{opacity:1;color:var(--indigo2)}
+th.sortable.sort-asc,
+th.sortable.sort-desc{color:var(--indigo2)}
 td{
   padding:13px 16px;border-bottom:1px solid var(--border-soft);
   vertical-align:middle;white-space:nowrap;
@@ -981,13 +996,13 @@ select option{background:#1a1f2e;color:#e8ecf4}
       <table>
         <thead>
           <tr>
-            <th>Store</th>
-            <th>Area</th>
-            <th style="text-align:right">Sales</th>
-            <th style="text-align:right">Sales LY</th>
-            <th style="text-align:center">Diff %</th>
-            <th style="text-align:right">Diff Amount</th>
-            <th>Justification</th>
+            <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortDaily('storeName','string')">Store <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortDaily('area','string')">Area <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="sales" data-sort-type="num" style="text-align:right" onclick="sortDaily('sales','num')">Sales <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="salesLY" data-sort-type="num" style="text-align:right" onclick="sortDaily('salesLY','num')">Sales LY <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="diffPct" data-sort-type="num" style="text-align:center" onclick="sortDaily('diffPct','num')">Diff % <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="diffVal" data-sort-type="num" style="text-align:right" onclick="sortDaily('diffVal','num')">Diff Amount <span class="sort-icon">⇅</span></th>
+            <th class="sortable" data-sort-key="justification" data-sort-type="string" onclick="sortDaily('justification','string')">Justification <span class="sort-icon">⇅</span></th>
           </tr>
         </thead>
         <tbody id="tableBody">
@@ -1103,13 +1118,13 @@ select option{background:#1a1f2e;color:#e8ecf4}
         <table>
           <thead>
             <tr>
-              <th>Store ID</th>
-              <th>Store Name</th>
-              <th>Area</th>
-              <th style="text-align:right">Sales</th>
-              <th style="text-align:right">Sales LY</th>
-              <th style="text-align:center">Diff %</th>
-              <th style="text-align:right">Diff Amount</th>
+              <th class="sortable" data-sort-key="storeId" data-sort-type="num" onclick="sortMSummary('storeId','num')">Store ID <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortMSummary('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortMSummary('area','string')">Area <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="sales" data-sort-type="num" style="text-align:right" onclick="sortMSummary('sales','num')">Sales <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="salesLY" data-sort-type="num" style="text-align:right" onclick="sortMSummary('salesLY','num')">Sales LY <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="diffPct" data-sort-type="num" style="text-align:center" onclick="sortMSummary('diffPct','num')">Diff % <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="diffVal" data-sort-type="num" style="text-align:right" onclick="sortMSummary('diffVal','num')">Diff Amount <span class="sort-icon">⇅</span></th>
             </tr>
           </thead>
           <tbody id="mSummaryBody">
@@ -1196,11 +1211,17 @@ let allFilters = { areas: [], stores: [] };
 let barChartInst = null;
 let pieChartInst = null;
 
+// Daily sort state
+let dailyRowsCache = [];
+let dailySort = { key: 'sales', dir: 'desc', type: 'num' };
+
 // Monthly tab state
 let mBarChartInst = null;
 let mLineChartInst = null;
 let mSignFilter = 'ALL';
-let mDetailRowsCache = []; // cached current detail rows for export
+let mDetailRowsCache = [];
+let mSummaryRowsCache = [];
+let mSummarySort = { key: 'sales', dir: 'desc', type: 'num' };
 let mMonthFilters = { areas: [], stores: [], months: [] };
 
 // ─── Tab switching ───────────────────────────────────────────────────────
@@ -1300,7 +1321,9 @@ async function applyFilters() {
     const dateLabel = date ? new Date(date + 'T00:00:00').toLocaleDateString('en-PH', { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : 'All dates';
     document.getElementById('tableDate').textContent = dateLabel;
     renderKPIs(rows);
-    renderTable(rows);
+    dailyRowsCache = rows;
+    renderTable(sortRows(rows, dailySort));
+    updateSortHeaders('mainTable', dailySort);
     renderCharts(rows);
     renderMissing(json.missing || [], !!date);
     setStatus('live', 'Live');
@@ -1676,7 +1699,9 @@ async function applyMonthlyFilters() {
     document.getElementById('mTableDate').textContent = monthLabel;
 
     renderMKPIs(summary);
-    renderMSummary(summary);
+    mSummaryRowsCache = summary;
+    renderMSummary(sortRows(summary, mSummarySort));
+    updateSortHeaders('mSummaryBody', mSummarySort);
     renderMDetail(detail);
     renderMCharts(summary, trend);
   } catch(e) {
@@ -1981,6 +2006,65 @@ function exportDetailToExcel() {
   const filename = \`CaMaNaVa_Monthly_\${safeMonth}\${areaTag}\${storeTag}\${tag}.xlsx\`;
 
   XLSX.writeFile(wb, filename);
+}
+
+// ─── Sorting helpers ────────────────────────────────────────────────────────
+function sortRows(rows, sortState) {
+  if (!sortState || !sortState.key) return rows;
+  const { key, dir, type } = sortState;
+  const mult = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (type === 'num') {
+      av = parseFloat(av) || 0;
+      bv = parseFloat(bv) || 0;
+      return (av - bv) * mult;
+    }
+    av = (av || '').toString().toLowerCase();
+    bv = (bv || '').toString().toLowerCase();
+    if (av < bv) return -1 * mult;
+    if (av > bv) return  1 * mult;
+    return 0;
+  });
+}
+
+function updateSortHeaders(tbodyId, sortState) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const table = tbody.closest('table');
+  if (!table) return;
+  table.querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('sort-asc','sort-desc');
+    const icon = th.querySelector('.sort-icon');
+    if (th.dataset.sortKey === sortState.key) {
+      th.classList.add(sortState.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+      if (icon) icon.textContent = sortState.dir === 'asc' ? '▲' : '▼';
+    } else {
+      if (icon) icon.textContent = '⇅';
+    }
+  });
+}
+
+function sortDaily(key, type) {
+  if (dailySort.key === key) {
+    dailySort.dir = dailySort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    dailySort = { key, dir: 'desc', type };
+  }
+  dailySort.type = type;
+  renderTable(sortRows(dailyRowsCache, dailySort));
+  updateSortHeaders('tableBody', dailySort);
+}
+
+function sortMSummary(key, type) {
+  if (mSummarySort.key === key) {
+    mSummarySort.dir = mSummarySort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    mSummarySort = { key, dir: 'desc', type };
+  }
+  mSummarySort.type = type;
+  renderMSummary(sortRows(mSummaryRowsCache, mSummarySort));
+  updateSortHeaders('mSummaryBody', mSummarySort);
 }
 
 function setStatus(type, text) {

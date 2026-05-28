@@ -284,7 +284,8 @@ const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,viewport-fit=cover"/>
+<meta name="theme-color" content="#0a0e1a"/>
 <title>CaMaNaVa eBRT — Daily Sales Report</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"/>
@@ -857,7 +858,62 @@ select option{background:#1a1f2e;color:#e8ecf4}
 }
 .loading-msg{font-size:12.5px;color:var(--text-2);font-weight:500}
 
-/* ── Scrollbar ── */
+/* ── Mobile performance ── */
+@media (max-width: 768px) {
+  /* Kill backdrop-filter on mobile — biggest perf win */
+  .header, .controls, .kpi, .chart-card, .table-card,
+  .missing-card, .tabs, .sync-btn, .badge,
+  .tab-content, .loading-overlay {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  /* Solid backgrounds instead of glass */
+  .header{background:rgba(22,27,39,0.98) !important}
+  .controls{background:rgba(24,30,48,0.98) !important}
+  .kpi{background:rgba(24,30,48,0.98) !important}
+  .chart-card{background:rgba(24,30,48,0.98) !important}
+  .table-card{background:rgba(24,30,48,0.98) !important}
+  .missing-card{background:rgba(24,30,48,0.98) !important}
+  .tabs{background:rgba(22,27,39,0.98) !important}
+
+  /* Disable animated background on mobile */
+  body::before{animation:none !important}
+  body::after{display:none !important}
+
+  /* Smaller layout adjustments */
+  .main{padding:14px 12px 30px}
+  .header{padding:12px 16px}
+  .controls{padding:12px 14px;gap:10px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr) !important;gap:10px}
+  .kpi{padding:14px 14px}
+  .kpi-value{font-size:20px}
+  .charts-grid{grid-template-columns:1fr !important}
+  .tabs{width:100%}
+  .tab-btn{flex:1;justify-content:center;padding:9px 10px;font-size:12px}
+
+  /* Table: allow horizontal scroll, compact padding */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  td,th{padding:9px 10px;font-size:11.5px}
+
+  /* Reduce logo text */
+  .logo-text{font-size:15px}
+  .logo-icon{width:36px;height:36px}
+
+  /* Reduce card border-radius */
+  .kpi,.chart-card,.table-card,.controls,.tabs,.missing-card{border-radius:12px}
+
+  /* Kill expensive glow/shadow effects on mobile */
+  .logo-icon::after{display:none !important}
+  .kpi::after{display:none !important}
+  .pulse{box-shadow:none !important}
+  .pill{box-shadow:none !important}
+  .area-dot{box-shadow:none !important}
+  .legend-dot{box-shadow:none !important}
+  .kpi:hover{transform:none !important}
+
+  /* Detail report justification - constrain width on mobile */
+  .just-full{max-width:200px}
+}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:rgba(15,20,35,0.4)}
 ::-webkit-scrollbar-thumb{background:linear-gradient(180deg, var(--indigo), #4f46e5);border-radius:4px}
@@ -1197,6 +1253,17 @@ select option{background:#1a1f2e;color:#e8ecf4}
 </main>
 
 <script>
+// ─── Mobile detection & Chart.js global tuning ──────────────────────────────
+const IS_MOBILE = window.matchMedia('(max-width: 768px)').matches;
+if (window.Chart) {
+  Chart.defaults.animation = IS_MOBILE ? false : { duration: 600 };
+  Chart.defaults.font.family = "'Inter', sans-serif";
+  if (IS_MOBILE) {
+    Chart.defaults.elements.point.radius = 0;
+    Chart.defaults.datasets.bar.maxBarThickness = 22;
+  }
+}
+
 // ─── Vibrant area palette ──────────────────────────────────────────────────
 const AREA_COLORS = {
   'Valenzuela':      '#6366f1',  // indigo
@@ -1426,7 +1493,7 @@ function renderTable(rows) {
 }
 
 function renderCharts(rows) {
-  const top = rows.slice(0, 14);
+  const top = rows.slice(0, IS_MOBILE ? 8 : 14);
   const labels = top.map(r => r.storeName);
   const salesArr = top.map(r => r.sales);
   const lyArr = top.map(r => r.salesLY);
@@ -1848,7 +1915,7 @@ function renderMDetail(rows) {
 
 function renderMCharts(summary, trend) {
   // Bar chart - top stores
-  const top = summary.slice(0, 14);
+  const top = summary.slice(0, IS_MOBILE ? 8 : 14);
   const labels = top.map(r => r.storeName);
   const salesArr = top.map(r => r.sales);
   const lyArr = top.map(r => r.salesLY);

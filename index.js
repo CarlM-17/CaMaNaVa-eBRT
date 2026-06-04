@@ -357,6 +357,7 @@ const HTML = `<!DOCTYPE html>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1168,8 +1169,10 @@ select option{background:#1a1f2e;color:#e8ecf4}
         <i class="fa fa-chart-column"></i> Average Daily Sales by Store
         <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Excl. blanks &amp; Jan 1</span>
       </div>
-      <div style="position:relative;height:320px">
-        <canvas id="avgStoreChart" role="img" aria-label="Average daily sales per store"></canvas>
+      <div style="overflow-y:auto;max-height:520px;padding-right:4px">
+        <div id="avgStoreChartWrap" style="position:relative;height:600px">
+          <canvas id="avgStoreChart" role="img" aria-label="Average daily sales per store"></canvas>
+        </div>
       </div>
     </div>
     <div class="chart-card">
@@ -1349,6 +1352,11 @@ if (window.Chart) {
   if (IS_MOBILE) {
     Chart.defaults.elements.point.radius = 0;
     Chart.defaults.datasets.bar.maxBarThickness = 22;
+  }
+  // Register datalabels but make it opt-in per chart
+  if (window.ChartDataLabels) {
+    Chart.register(ChartDataLabels);
+    Chart.defaults.plugins.datalabels = { display: false }; // off by default
   }
 }
 
@@ -2263,16 +2271,21 @@ function drawAvgStoreChart(perStore) {
   if (!canvas) return;
   if (avgStoreChartInst) avgStoreChartInst.destroy();
 
-  // Top N stores by avg
-  const top = perStore.slice(0, IS_MOBILE ? 8 : 16);
-  const labels = top.map(r => r.storeName);
-  const data = top.map(r => r.avg);
+  // Show ALL stores
+  const all = perStore;
+  const labels = all.map(r => r.storeName);
+  const data = all.map(r => r.avg);
+
+  // Dynamic height: ~26px per bar, min 320
+  const wrap = document.getElementById('avgStoreChartWrap');
+  const dynHeight = Math.max(320, all.length * 26 + 40);
+  if (wrap) wrap.style.height = dynHeight + 'px';
 
   const ctx = canvas.getContext('2d');
-  const gradients = top.map(r => {
+  const bgColors = all.map(r => {
     const [c1, c2] = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
-    const g = ctx.createLinearGradient(0, 0, 0, 320);
-    g.addColorStop(0, c2); g.addColorStop(1, c1);
+    const g = ctx.createLinearGradient(0, 0, canvas.width || 800, 0);
+    g.addColorStop(0, c1); g.addColorStop(1, c2);
     return g;
   });
 
@@ -2283,14 +2296,25 @@ function drawAvgStoreChart(perStore) {
       datasets: [{
         label: 'Avg Daily Sales',
         data,
-        backgroundColor: gradients,
-        borderRadius: 6, borderSkipped: false, barPercentage: 0.75,
+        backgroundColor: bgColors,
+        borderRadius: 5, borderSkipped: false, barPercentage: 0.78,
       }]
     },
     options: {
+      indexAxis: 'y',
       responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 80 } },
       plugins: {
         legend: { display: false },
+        datalabels: {
+          display: true,
+          anchor: 'end',
+          align: 'end',
+          color: '#e8ecf4',
+          font: { family: "'JetBrains Mono'", size: 10, weight: '600' },
+          formatter: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(2) + 'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0) + 'K' : '₱' + v.toFixed(0),
+          padding: { left: 6 }
+        },
         tooltip: {
           backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1,
           padding: 12, cornerRadius: 10,
@@ -2299,7 +2323,7 @@ function drawAvgStoreChart(perStore) {
           titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
           callbacks: {
             label: (ctx) => {
-              const r = top[ctx.dataIndex];
+              const r = all[ctx.dataIndex];
               return [
                 ' Avg/Day: ₱' + ctx.raw.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
                 ' Total: ₱' + r.total.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
@@ -2311,8 +2335,14 @@ function drawAvgStoreChart(perStore) {
         }
       },
       scales: {
-        x: { grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false }, ticks: { color: '#a8b3d1', font: { size: 10, family: "'Inter'", weight: '500' }, maxRotation: 40 } },
-        y: { grid: { color: 'rgba(148,163,200,0.06)' }, ticks: { color: '#a8b3d1', font: { size: 10.5, family: "'JetBrains Mono'", weight: '500' }, callback: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(1)+'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0)+'K' : v } }
+        x: {
+          grid: { color: 'rgba(148,163,200,0.06)' },
+          ticks: { color: '#a8b3d1', font: { size: 10, family: "'JetBrains Mono'", weight: '500' }, callback: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(1)+'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0)+'K' : v }
+        },
+        y: {
+          grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false },
+          ticks: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, autoSkip: false }
+        }
       }
     }
   });
@@ -2348,8 +2378,18 @@ function drawAvgAreaChart(perArea) {
     options: {
       indexAxis: 'y',
       responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 90 } },
       plugins: {
         legend: { display: false },
+        datalabels: {
+          display: true,
+          anchor: 'end',
+          align: 'end',
+          color: '#e8ecf4',
+          font: { family: "'JetBrains Mono'", size: 12, weight: '700' },
+          formatter: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(2) + 'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0) + 'K' : '₱' + v.toFixed(0),
+          padding: { left: 8 }
+        },
         tooltip: {
           backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1,
           padding: 12, cornerRadius: 10,

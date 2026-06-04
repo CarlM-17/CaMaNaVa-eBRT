@@ -280,6 +280,72 @@ app.get('/api/monthly', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
+// ─── API: GET /api/averages ─────────────────────────────────────────────────
+// Returns average daily sales per store and per area
+// Excludes records with blank sales (= 0) and any record dated January 1
+app.get('/api/averages', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const data = await getSalesData(sheets);
+
+    const { area, store } = req.query;
+
+    // Filter: exclude January 1 records and blank sales
+    let filtered = data.filter(r => {
+      if (!r.date || !r.sales || r.sales <= 0) return false;
+      // r.date is YYYY-MM-DD; check month-day != 01-01
+      const mmdd = r.date.substring(5);
+      if (mmdd === '01-01') return false;
+      return true;
+    });
+
+    if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
+    if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
+
+    // Per-store averages: sum / number of distinct days that store had data
+    const storeStats = {};
+    filtered.forEach(r => {
+      const key = r.storeId + '_' + r.storeName;
+      if (!storeStats[key]) {
+        storeStats[key] = {
+          storeId: r.storeId, storeName: r.storeName, area: r.area,
+          total: 0, days: new Set(),
+        };
+      }
+      storeStats[key].total += r.sales;
+      storeStats[key].days.add(r.date);
+    });
+    const perStore = Object.values(storeStats).map(s => ({
+      storeId: s.storeId, storeName: s.storeName, area: s.area,
+      avg: s.days.size ? s.total / s.days.size : 0,
+      total: s.total, dayCount: s.days.size,
+    })).sort((a, b) => b.avg - a.avg);
+
+    // Per-area averages: sum / number of distinct (date, store) combos
+    const areaStats = {};
+    filtered.forEach(r => {
+      if (!areaStats[r.area]) {
+        areaStats[r.area] = { area: r.area, total: 0, count: 0, days: new Set() };
+      }
+      areaStats[r.area].total += r.sales;
+      areaStats[r.area].count += 1;
+      areaStats[r.area].days.add(r.date);
+    });
+    const perArea = Object.values(areaStats).map(a => ({
+      area: a.area,
+      avgPerRecord: a.count ? a.total / a.count : 0,
+      avgPerDay: a.days.size ? a.total / a.days.size : 0,
+      total: a.total, recordCount: a.count, dayCount: a.days.size,
+    })).sort((a, b) => b.avgPerDay - a.avgPerDay);
+
+    res.json({ success: true, perStore, perArea, totalRecords: filtered.length });
+  } catch (err) {
+    console.error('Averages error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1095,6 +1161,28 @@ select option{background:#1a1f2e;color:#e8ecf4}
     </div>
   </div>
 
+  <!-- Average Daily Sales Charts -->
+  <div class="charts-grid" style="margin-top:24px">
+    <div class="chart-card">
+      <div class="chart-title">
+        <i class="fa fa-chart-column"></i> Average Daily Sales by Store
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Excl. blanks &amp; Jan 1</span>
+      </div>
+      <div style="position:relative;height:320px">
+        <canvas id="avgStoreChart" role="img" aria-label="Average daily sales per store"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">
+        <i class="fa fa-chart-simple"></i> Average Daily Sales by Area
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Excl. blanks &amp; Jan 1</span>
+      </div>
+      <div style="position:relative;height:320px">
+        <canvas id="avgAreaChart" role="img" aria-label="Average daily sales per area"></canvas>
+      </div>
+    </div>
+  </div>
+
   </div><!-- /tab-daily -->
 
   <!-- ═══════════════════ MONTHLY TAB ═══════════════════ -->
@@ -1282,6 +1370,8 @@ const DEFAULT_COLOR = '#94a3b8';
 let allFilters = { areas: [], stores: [] };
 let barChartInst = null;
 let pieChartInst = null;
+let avgStoreChartInst = null;
+let avgAreaChartInst = null;
 
 // Daily sort state
 let dailyRowsCache = [];
@@ -1398,6 +1488,7 @@ async function applyFilters() {
     updateSortHeaders('mainTable', dailySort);
     renderCharts(rows);
     renderMissing(json.missing || [], !!date);
+    renderAverages(); // independent of date filter
     setStatus('live', 'Live');
   } catch(e) {
     console.error(e);
@@ -2143,6 +2234,153 @@ function sortMSummary(key, type) {
   mSummarySort.type = type;
   renderMSummary(sortRows(mSummaryRowsCache, mSummarySort));
   updateSortHeaders('mSummaryBody', mSummarySort);
+}
+
+// ─── Average Daily Sales charts ────────────────────────────────────────────
+async function renderAverages() {
+  // Respect Area and Store filters; ignore Date (averages span all data)
+  const area  = document.getElementById('areaFilter').value;
+  const store = document.getElementById('storeFilter').value;
+
+  const params = new URLSearchParams();
+  if (area  !== 'ALL') params.set('area', area);
+  if (store !== 'ALL') params.set('store', store);
+
+  try {
+    const res  = await fetch('/api/averages?' + params);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+
+    drawAvgStoreChart(json.perStore || []);
+    drawAvgAreaChart(json.perArea || []);
+  } catch(e) {
+    console.error('Averages fetch error:', e);
+  }
+}
+
+function drawAvgStoreChart(perStore) {
+  const canvas = document.getElementById('avgStoreChart');
+  if (!canvas) return;
+  if (avgStoreChartInst) avgStoreChartInst.destroy();
+
+  // Top N stores by avg
+  const top = perStore.slice(0, IS_MOBILE ? 8 : 16);
+  const labels = top.map(r => r.storeName);
+  const data = top.map(r => r.avg);
+
+  const ctx = canvas.getContext('2d');
+  const gradients = top.map(r => {
+    const [c1, c2] = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const g = ctx.createLinearGradient(0, 0, 0, 320);
+    g.addColorStop(0, c2); g.addColorStop(1, c1);
+    return g;
+  });
+
+  avgStoreChartInst = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg Daily Sales',
+        data,
+        backgroundColor: gradients,
+        borderRadius: 6, borderSkipped: false, barPercentage: 0.75,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1,
+          padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", size: 13, weight: '600' },
+          bodyFont:  { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: {
+            label: (ctx) => {
+              const r = top[ctx.dataIndex];
+              return [
+                ' Avg/Day: ₱' + ctx.raw.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
+                ' Total: ₱' + r.total.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
+                ' Days: ' + r.dayCount,
+                ' Area: ' + r.area,
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false }, ticks: { color: '#a8b3d1', font: { size: 10, family: "'Inter'", weight: '500' }, maxRotation: 40 } },
+        y: { grid: { color: 'rgba(148,163,200,0.06)' }, ticks: { color: '#a8b3d1', font: { size: 10.5, family: "'JetBrains Mono'", weight: '500' }, callback: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(1)+'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0)+'K' : v } }
+      }
+    }
+  });
+}
+
+function drawAvgAreaChart(perArea) {
+  const canvas = document.getElementById('avgAreaChart');
+  if (!canvas) return;
+  if (avgAreaChartInst) avgAreaChartInst.destroy();
+
+  const labels = perArea.map(a => a.area);
+  const data = perArea.map(a => a.avgPerDay);
+
+  const ctx = canvas.getContext('2d');
+  const gradients = perArea.map(a => {
+    const [c1, c2] = AREA_GRADIENTS[a.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const g = ctx.createLinearGradient(0, 0, 0, 320);
+    g.addColorStop(0, c2); g.addColorStop(1, c1);
+    return g;
+  });
+
+  avgAreaChartInst = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg Daily Sales',
+        data,
+        backgroundColor: gradients,
+        borderRadius: 8, borderSkipped: false, barPercentage: 0.6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1,
+          padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", size: 13, weight: '600' },
+          bodyFont:  { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: {
+            label: (ctx) => {
+              const a = perArea[ctx.dataIndex];
+              return [
+                ' Avg/Day: ₱' + ctx.raw.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
+                ' Total: ₱' + a.total.toLocaleString('en-PH', { minimumFractionDigits: 2 }),
+                ' Days: ' + a.dayCount,
+                ' Records: ' + a.recordCount,
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(148,163,200,0.06)' },
+          ticks: { color: '#a8b3d1', font: { size: 10.5, family: "'JetBrains Mono'", weight: '500' }, callback: v => v >= 1e6 ? '₱' + (v/1e6).toFixed(1)+'M' : v >= 1e3 ? '₱' + (v/1e3).toFixed(0)+'K' : v }
+        },
+        y: {
+          grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false },
+          ticks: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '600' } }
+        }
+      }
+    }
+  });
 }
 
 function setStatus(type, text) {

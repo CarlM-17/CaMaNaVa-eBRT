@@ -427,11 +427,20 @@ app.get('/api/category', async (req, res) => {
     Object.entries(subDepsByCategory).forEach(([k,v]) => { subDepsByCategoryOut[k] = [...v].sort(); });
 
     // ── Sub-Department Detail ──────────────────────────────────────────────
-    // Aggregate by (category, sdepCode, subDepName) across the filter scope
+    // Aggregate by (category, storeCode, storeName, subDepName) so each row is one store's sub-dept
     const subMap = {};
     filtered.forEach(r => {
-      const key = (r.category || '') + '||' + (r.sdepCode || '') + '||' + (r.subDepName || '');
-      if (!subMap[key]) subMap[key] = { category: r.category, sdepCode: r.sdepCode, subDepName: r.subDepName, sales: 0, salesLY: 0 };
+      const key = (r.category || '') + '||' + (r.storeCode || '') + '||' + (r.subDepName || '');
+      if (!subMap[key]) subMap[key] = {
+        category: r.category,
+        storeCode: r.storeCode,
+        storeName: r.storeName,
+        area: r.area,
+        subDepName: r.subDepName,
+        sdepCode: r.sdepCode,
+        sales: 0,
+        salesLY: 0,
+      };
       subMap[key].sales   += r.sales;
       subMap[key].salesLY += r.salesLY;
     });
@@ -441,8 +450,19 @@ app.get('/api/category', async (req, res) => {
       return { ...s, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     });
 
-    // Movers calculated BEFORE sign filter (so users see top/bottom regardless of toggle)
-    const moversSrc = [...detail].sort((a, b) => b.diffVal - a.diffVal);
+    // Movers calculated BEFORE sign filter - aggregate by subDepName only (no store breakdown for movers)
+    const moversAgg = {};
+    detail.forEach(r => {
+      const key = r.subDepName || '';
+      if (!moversAgg[key]) moversAgg[key] = { subDepName: r.subDepName, category: r.category, sales: 0, salesLY: 0 };
+      moversAgg[key].sales   += r.sales;
+      moversAgg[key].salesLY += r.salesLY;
+    });
+    const moversList = Object.values(moversAgg).map(m => {
+      const diffVal = m.sales - m.salesLY;
+      return { ...m, diffVal };
+    });
+    const moversSrc = [...moversList].sort((a, b) => b.diffVal - a.diffVal);
     const movers = {
       top: moversSrc.filter(r => r.diffVal > 0).slice(0, 10),
       bottom: moversSrc.filter(r => r.diffVal < 0).slice(-10).reverse(),
@@ -1732,7 +1752,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
           <thead>
             <tr>
               <th class="sortable" data-sort-key="category" data-sort-type="string" onclick="sortCDetail('category','string')">Category <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="sdepCode" data-sort-type="string" onclick="sortCDetail('sdepCode','string')">SDep Code <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortCDetail('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="subDepName" data-sort-type="string" onclick="sortCDetail('subDepName','string')">Sub-Department <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="sales" data-sort-type="num" style="text-align:right" onclick="sortCDetail('sales','num')">Sales <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="salesLY" data-sort-type="num" style="text-align:right" onclick="sortCDetail('salesLY','num')">Sales LY <span class="sort-icon">⇅</span></th>
@@ -3207,13 +3227,23 @@ function renderCDetail(rows) {
   const html = rows.map(r => {
     const pctCls = r.diffPct > 0.05 ? 'up' : r.diffPct < -0.05 ? 'down' : 'flat';
     const color = catColors[r.category] || DEFAULT_COLOR;
+    const areaColor = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
     const diffColor = r.diffVal >= 0 ? '#34d399' : '#fb7185';
     const arrow = r.diffPct > 0.05 ? '↑' : r.diffPct < -0.05 ? '↓' : '—';
     const pctStr = r.diffPct !== 0 ? \`\${arrow} \${Math.abs(r.diffPct).toFixed(2)}%\` : '—';
 
     return \`<tr>
       <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${r.category || '—'}</span></td>
-      <td><span class="num" style="color:var(--text-2);font-weight:600">\${r.sdepCode || '—'}</span></td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:30px;height:30px;font-size:10.5px">\${initials(r.storeName)}</div>
+          <div class="store-info">
+            <div class="store-name" style="font-size:12.5px">\${r.storeName || '—'}</div>
+            <div class="store-id">\${r.area || ''}</div>
+          </div>
+        </div>
+      </td>
       <td><span style="font-size:12.5px;color:var(--text-1);font-weight:500">\${r.subDepName || '—'}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(r.sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(r.salesLY)}</span></td>
@@ -3603,7 +3633,8 @@ function exportCategoryToExcel() {
 
   const data = cDetailRowsCache.map(r => ({
     'Category': r.category || '',
-    'SDep Code': r.sdepCode || '',
+    'Store Name': r.storeName || '',
+    'Area': r.area || '',
     'Sub-Department': r.subDepName || '',
     'Sales': r.sales || 0,
     'Sales LY': r.salesLY || 0,
@@ -3613,7 +3644,7 @@ function exportCategoryToExcel() {
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{wch:20},{wch:14},{wch:36},{wch:16},{wch:16},{wch:10},{wch:16}];
+  ws['!cols'] = [{wch:20},{wch:22},{wch:18},{wch:36},{wch:16},{wch:16},{wch:10},{wch:16}];
 
   const headerStyle = { fill:{fgColor:{rgb:'166534'}}, font:{color:{rgb:'FFFFFF'},bold:true}, alignment:{horizontal:'center',vertical:'center'} };
   const range = XLSX.utils.decode_range(ws['!ref']);
@@ -3621,7 +3652,7 @@ function exportCategoryToExcel() {
     const addr = XLSX.utils.encode_cell({ r: 0, c: C });
     if (ws[addr]) ws[addr].s = headerStyle;
   }
-  const numCols = { 3:'#,##0.00', 4:'#,##0.00', 5:'0.00"%"', 6:'#,##0.00' };
+  const numCols = { 4:'#,##0.00', 5:'#,##0.00', 6:'0.00"%"', 7:'#,##0.00' };
   for (let R = 1; R <= range.e.r; R++) {
     for (const [col, fmt] of Object.entries(numCols)) {
       const addr = XLSX.utils.encode_cell({ r: R, c: parseInt(col) });

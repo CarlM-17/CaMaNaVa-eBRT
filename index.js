@@ -136,13 +136,23 @@ async function getCategoryData(sheets) {
 async function getStoreNotesData(sheets) {
   const now = Date.now();
   if (storeNotesCache && (now - storeNotesCacheTime) < CACHE_TTL) return storeNotesCache;
-  const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: STORE_NOTES_RANGE });
-  const rows = response.data.values || [];
+
+  // Fetch BOTH values and hyperlinks for column M (so we get the URL behind "Open Photo")
+  const [valsResp, linksResp] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: STORE_NOTES_RANGE }),
+    sheets.spreadsheets.get({
+      spreadsheetId: SHEET_ID,
+      ranges: [STORE_NOTES_RANGE],
+      fields: 'sheets.data.rowData.values(hyperlink,formattedValue,userEnteredValue,textFormatRuns(format/link))'
+    })
+  ]);
+
+  const rows = valsResp.data.values || [];
+  const richRows = ((((linksResp.data.sheets || [])[0] || {}).data || [])[0] || {}).rowData || [];
+
   const data = [];
-  // Skip header row (row index 0)
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || [];
-    // Columns: A=ID, B=TimeStamp, C=StoreID, D=StoreName, E=Area, F=Notes, G=Photo, H=PhotoDraft, I=Submittedby, J=PhotoLink, K=Status, L=Remarks, M=Photo Link
     const id          = (r[0] || '').trim();
     const timestamp   = (r[1] || '').trim();
     const storeId     = (r[2] || '').trim();
@@ -152,13 +162,57 @@ async function getStoreNotesData(sheets) {
     const photo       = (r[6] || '').trim();
     const photoDraft  = (r[7] || '').trim();
     const submittedBy = (r[8] || '').trim();
-    const photoLink   = (r[9] || '').trim();
+    const photoLinkJ  = (r[9] || '').trim();
     const status      = (r[10] || '').trim();
     const remarks     = (r[11] || '').trim();
     const photoLinkM  = (r[12] || '').trim();
-    // skip totally blank rows
+
     if (!timestamp && !storeId && !notes) continue;
-    data.push({ id, timestamp, storeId, storeName, area, notes, photo, photoDraft, submittedBy, photoLink, status, remarks, photoLinkM });
+
+    // Extract URL from column M (index 12) - it can be either a hyperlink, textFormatRun link, or HYPERLINK formula
+    let photoUrl = null;
+    const cellM = ((richRows[i] || {}).values || [])[12];
+    if (cellM) {
+      // Try direct hyperlink property first
+      if (cellM.hyperlink) {
+        photoUrl = cellM.hyperlink;
+      }
+      // Try text format runs (rich text hyperlinks)
+      else if (cellM.textFormatRuns && cellM.textFormatRuns.length) {
+        for (const run of cellM.textFormatRuns) {
+          if (run.format && run.format.link && run.format.link.uri) {
+            photoUrl = run.format.link.uri;
+            break;
+          }
+        }
+      }
+      // Try HYPERLINK() formula
+      else if (cellM.userEnteredValue && cellM.userEnteredValue.formulaValue) {
+        const formula = cellM.userEnteredValue.formulaValue;
+        const m = formula.match(/HYPERLINK\(\s*"([^"]+)"/i);
+        if (m) photoUrl = m[1];
+      }
+    }
+
+    // Fallback to column G if M didn't have a link but G has a URL
+    if (!photoUrl && photo && /^https?:\/\//i.test(photo)) {
+      photoUrl = photo;
+    }
+
+    // Parse timestamp to numeric epoch for sorting (0 if unparseable so they sort last on desc)
+    let ts = 0;
+    if (timestamp) {
+      const d = new Date(timestamp);
+      if (!isNaN(d.getTime())) ts = d.getTime();
+    }
+
+    data.push({
+      id, timestamp, ts,
+      storeId, storeName, area, notes,
+      photo, photoDraft, submittedBy,
+      photoLink: photoLinkJ, status, remarks,
+      photoLinkM, photoUrl
+    });
   }
   storeNotesCache = data;
   storeNotesCacheTime = now;
@@ -569,12 +623,8 @@ app.get('/api/store-notes', async (req, res) => {
         (r.remarks || '').toLowerCase().includes(needle)
       );
     }
-    // Sort newest first by parsed timestamp
-    filtered.sort((a, b) => {
-      const ad = new Date(a.timestamp).getTime() || 0;
-      const bd = new Date(b.timestamp).getTime() || 0;
-      return bd - ad;
-    });
+    // Sort newest first by parsed timestamp (ts is pre-parsed numeric)
+    filtered.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     res.json({ success: true, count: filtered.length, rows: filtered });
   } catch (err) {
     console.error('Store-notes error:', err.message);
@@ -1959,19 +2009,18 @@ select option{background:#1a1f2e;color:#e8ecf4}
         <table>
           <thead>
             <tr>
-              <th class="sortable" data-sort-key="timestamp" data-sort-type="string" onclick="sortNotes('timestamp','string')">Time Stamp <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="ts" data-sort-type="num" onclick="sortNotes('ts','num')">Time Stamp <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="storeId" data-sort-type="string" onclick="sortNotes('storeId','string')">Store ID <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortNotes('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortNotes('area','string')">Area <span class="sort-icon">⇅</span></th>
               <th>Notes</th>
-              <th style="text-align:center">Photo</th>
               <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortNotes('status','string')">Status <span class="sort-icon">⇅</span></th>
               <th>Remarks</th>
               <th style="text-align:center">Photo Link</th>
             </tr>
           </thead>
           <tbody id="nTableBody">
-            <tr><td colspan="9" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            <tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
@@ -3817,7 +3866,7 @@ const nState = {
   initialized: false,
   rows: [],
   filters: { areas: [], stores: [], statuses: [] },
-  sort: { key: 'timestamp', dir: 'desc', type: 'string' },
+  sort: { key: 'ts', dir: 'desc', type: 'num' },
 };
 
 async function initNotesTab() {
@@ -3850,7 +3899,7 @@ async function initNotesTab() {
   } catch(e) {
     console.error('Notes init error:', e);
     document.getElementById('nTableBody').innerHTML =
-      \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+      \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
   }
 }
 
@@ -3908,7 +3957,7 @@ async function applyNotesFilters() {
   } catch(e) {
     console.error(e);
     document.getElementById('nTableBody').innerHTML =
-      \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+      \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
   }
 }
 
@@ -3948,7 +3997,7 @@ function isValidUrl(s) {
 function renderNotesTable(rows) {
   const tbody = document.getElementById('nTableBody');
   if (!rows.length) {
-    tbody.innerHTML = \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No notes found</p><small>Try adjusting your filters</small></td></tr>\`;
+    tbody.innerHTML = \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No notes found</p><small>Try adjusting your filters</small></td></tr>\`;
     return;
   }
 
@@ -3957,10 +4006,13 @@ function renderNotesTable(rows) {
     const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
     const stCls = statusClass(r.status);
     const stIcon = statusIcon(r.status);
-    const photoUrl = r.photo && isValidUrl(r.photo) ? r.photo : null;
+
+    // Prefer the resolved URL from column M (rich text hyperlink), fallback to column G
+    const photoUrl = r.photoUrl || (r.photo && isValidUrl(r.photo) ? r.photo : null);
     const photoBtn = photoUrl
-      ? \`<a href="\${photoUrl.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer" class="photo-link-btn"><i class="fa fa-image"></i> View</a>\`
+      ? \`<a href="\${photoUrl.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer" class="photo-link-btn"><i class="fa fa-image"></i> Open Photo</a>\`
       : \`<span class="photo-link-btn disabled"><i class="fa fa-image-portrait"></i> —</span>\`;
+
     const notes = (r.notes || '—').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const remarks = (r.remarks || '—').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -3977,7 +4029,6 @@ function renderNotesTable(rows) {
       </td>
       <td><span class="area-tag"><span class="area-dot" style="background:\${areaColor};color:\${areaColor}"></span>\${r.area || '—'}</span></td>
       <td><div class="notes-cell">\${notes}</div></td>
-      <td style="text-align:center">\${photoBtn}</td>
       <td><span class="status-pill \${stCls}"><i class="fa \${stIcon}"></i> \${r.status || '—'}</span></td>
       <td><div class="remarks-cell">\${remarks}</div></td>
       <td style="text-align:center">\${photoBtn}</td>

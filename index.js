@@ -2026,6 +2026,117 @@ select option{background:#1a1f2e;color:#e8ecf4}
       </div>
     </div>
 
+    <!-- Status Performance KPIs -->
+    <div class="kpi-grid" style="margin-top:24px">
+      <div class="kpi k-sales">
+        <div class="kpi-label"><div class="kpi-icon"><i class="fa fa-list-check"></i></div>Total Notes</div>
+        <div class="kpi-value gradient-text" id="nKpiTotal">—</div>
+        <div class="kpi-sub">In current view</div>
+      </div>
+      <div class="kpi" style="--accent-color:#10b981">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#10b981,#34d399)"><i class="fa fa-circle-check"></i></div>Done</div>
+        <div class="kpi-value" id="nKpiDone" style="color:#34d399">—</div>
+        <div class="kpi-sub" id="nKpiDoneSub">0%</div>
+      </div>
+      <div class="kpi" style="--accent-color:#f59e0b">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><i class="fa fa-clock"></i></div>Pending</div>
+        <div class="kpi-value" id="nKpiPending" style="color:#fbbf24">—</div>
+        <div class="kpi-sub" id="nKpiPendingSub">0%</div>
+      </div>
+      <div class="kpi" style="--accent-color:#6366f1">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#6366f1,#818cf8)"><i class="fa fa-spinner"></i></div>Ongoing</div>
+        <div class="kpi-value" id="nKpiOngoing" style="color:#818cf8">—</div>
+        <div class="kpi-sub" id="nKpiOngoingSub">0%</div>
+      </div>
+      <div class="kpi" style="--accent-color:#94a3b8">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#64748b,#94a3b8)"><i class="fa fa-circle-question"></i></div>No Status</div>
+        <div class="kpi-value" id="nKpiBlank" style="color:#94a3b8">—</div>
+        <div class="kpi-sub" id="nKpiBlankSub">0%</div>
+      </div>
+    </div>
+
+    <!-- Performance Charts -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">
+          <i class="fa fa-ranking-star"></i> Area Status Performance
+          <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Best → Worst</span>
+        </div>
+        <div style="position:relative;height:300px">
+          <canvas id="nAreaChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">
+          <i class="fa fa-chart-pie"></i> Overall Status Mix
+        </div>
+        <div style="position:relative;height:300px">
+          <canvas id="nStatusPie"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Store Performance Chart (full width, scrollable for many stores) -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-title">
+        <i class="fa fa-store"></i> Store Status Performance
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Ranked Best → Worst</span>
+      </div>
+      <div style="overflow-y:auto;max-height:560px;padding-right:4px">
+        <div id="nStoreChartWrap" style="position:relative;height:600px">
+          <canvas id="nStoreChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Detail Tables -->
+    <div class="charts-grid" style="margin-top:16px">
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title"><i class="fa fa-map-location-dot"></i> Area Status Breakdown</div>
+          <div class="table-date" id="nAreaTableInfo">—</div>
+        </div>
+        <div class="table-wrap" style="max-height:380px">
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Area</th>
+                <th style="text-align:center">Total</th>
+                <th style="text-align:center" title="Done %">Done %</th>
+                <th style="text-align:center" title="Pending %">Pending %</th>
+                <th style="text-align:center" title="Ongoing %">Ongoing %</th>
+                <th style="text-align:center" title="No Status %">Blank %</th>
+              </tr>
+            </thead>
+            <tbody id="nAreaTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title"><i class="fa fa-store"></i> Store Status Breakdown</div>
+          <div class="table-date" id="nStoreTableInfo">—</div>
+        </div>
+        <div class="table-wrap" style="max-height:380px">
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Store</th>
+                <th style="text-align:center">Total</th>
+                <th style="text-align:center">Done %</th>
+                <th style="text-align:center">Pending %</th>
+                <th style="text-align:center">Ongoing %</th>
+                <th style="text-align:center">Blank %</th>
+              </tr>
+            </thead>
+            <tbody id="nStoreTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /tab-notes -->
 
 </main>
@@ -3867,6 +3978,9 @@ const nState = {
   rows: [],
   filters: { areas: [], stores: [], statuses: [] },
   sort: { key: 'ts', dir: 'desc', type: 'num' },
+  areaChart: null,
+  storeChart: null,
+  statusPie: null,
 };
 
 async function initNotesTab() {
@@ -3954,6 +4068,7 @@ async function applyNotesFilters() {
     document.getElementById('nRecordsCount').innerHTML = \`<span>\${nState.rows.length}</span> note\${nState.rows.length!==1?'s':''}\`;
     renderNotesTable(sortRows(nState.rows, nState.sort));
     updateSortHeaders('nTableBody', nState.sort);
+    renderNotesAnalytics(nState.rows);
   } catch(e) {
     console.error(e);
     document.getElementById('nTableBody').innerHTML =
@@ -4036,6 +4151,298 @@ function renderNotesTable(rows) {
   }).join('');
 
   tbody.innerHTML = html;
+}
+
+// ─── Status bucketing ────────────────────────────────────────────────────
+function statusBucket(status) {
+  const s = (status || '').toLowerCase().trim();
+  if (!s) return 'blank';
+  if (s.includes('done') || s.includes('complete') || s.includes('closed') || s.includes('resolved') || s.includes('finished')) return 'done';
+  if (s.includes('pending') || s === 'open' || s.includes('new') || s.includes('draft')) return 'pending';
+  if (s.includes('ongoing') || s.includes('progress') || s.includes('in-progress') || s.includes('inprogress') || s.includes('review')) return 'ongoing';
+  // Anything else also goes to ongoing as a "work in flight" catch-all? Better: put unknowns under blank for clarity.
+  // We'll treat unknown statuses as "other" → group into blank since user only asked for these 4.
+  return 'blank';
+}
+
+const STATUS_COLORS = {
+  done:    { fill: '#10b981', glow: '#34d399', label: 'Done' },
+  pending: { fill: '#f59e0b', glow: '#fbbf24', label: 'Pending' },
+  ongoing: { fill: '#6366f1', glow: '#818cf8', label: 'Ongoing' },
+  blank:   { fill: '#64748b', glow: '#94a3b8', label: 'No Status' },
+};
+
+function calcStatusBreakdown(rows) {
+  const counts = { done: 0, pending: 0, ongoing: 0, blank: 0, total: rows.length };
+  rows.forEach(r => { counts[statusBucket(r.status)]++; });
+  const pct = k => counts.total ? (counts[k] / counts.total * 100) : 0;
+  return {
+    counts,
+    pctDone:    pct('done'),
+    pctPending: pct('pending'),
+    pctOngoing: pct('ongoing'),
+    pctBlank:   pct('blank'),
+  };
+}
+
+function renderNotesAnalytics(rows) {
+  const overall = calcStatusBreakdown(rows);
+
+  // ─── KPI cards ───
+  document.getElementById('nKpiTotal').textContent   = overall.counts.total;
+  document.getElementById('nKpiDone').textContent    = overall.counts.done;
+  document.getElementById('nKpiDoneSub').textContent = overall.pctDone.toFixed(1) + '% of total';
+  document.getElementById('nKpiPending').textContent = overall.counts.pending;
+  document.getElementById('nKpiPendingSub').textContent = overall.pctPending.toFixed(1) + '% of total';
+  document.getElementById('nKpiOngoing').textContent = overall.counts.ongoing;
+  document.getElementById('nKpiOngoingSub').textContent = overall.pctOngoing.toFixed(1) + '% of total';
+  document.getElementById('nKpiBlank').textContent   = overall.counts.blank;
+  document.getElementById('nKpiBlankSub').textContent = overall.pctBlank.toFixed(1) + '% of total';
+
+  // ─── Group by area & store ───
+  const groupBy = (rows, keyFn) => {
+    const map = {};
+    rows.forEach(r => {
+      const k = keyFn(r) || '—';
+      if (!map[k]) map[k] = [];
+      map[k].push(r);
+    });
+    return map;
+  };
+
+  const byArea = Object.entries(groupBy(rows, r => r.area)).map(([area, list]) => {
+    const b = calcStatusBreakdown(list);
+    return { area, total: list.length, ...b };
+  });
+  const byStore = Object.entries(groupBy(rows, r => r.storeName)).map(([storeName, list]) => {
+    const b = calcStatusBreakdown(list);
+    const area = list[0] ? list[0].area : '';
+    const storeId = list[0] ? list[0].storeId : '';
+    return { storeName, storeId, area, total: list.length, ...b };
+  });
+
+  // Rank by "best": highest Done % first; tiebreak by lower Blank %, then by total (more notes = stronger signal)
+  const rank = (a, b) =>
+    (b.pctDone - a.pctDone) ||
+    (a.pctBlank - b.pctBlank) ||
+    (b.total - a.total);
+  byArea.sort(rank);
+  byStore.sort(rank);
+
+  renderAreaStatusChart(byArea);
+  renderStatusPie(overall.counts);
+  renderStoreStatusChart(byStore);
+  renderAreaStatusTable(byArea);
+  renderStoreStatusTable(byStore);
+
+  document.getElementById('nAreaTableInfo').textContent = \`\${byArea.length} area\${byArea.length !== 1 ? 's' : ''}\`;
+  document.getElementById('nStoreTableInfo').textContent = \`\${byStore.length} store\${byStore.length !== 1 ? 's' : ''}\`;
+}
+
+function renderAreaStatusChart(rows) {
+  const canvas = document.getElementById('nAreaChart');
+  if (!canvas) return;
+  if (nState.areaChart) nState.areaChart.destroy();
+
+  const labels = rows.map(r => r.area);
+  const datasets = [
+    { label: 'Done',      data: rows.map(r => r.pctDone),    backgroundColor: STATUS_COLORS.done.fill,    borderRadius: 4 },
+    { label: 'Ongoing',   data: rows.map(r => r.pctOngoing), backgroundColor: STATUS_COLORS.ongoing.fill, borderRadius: 4 },
+    { label: 'Pending',   data: rows.map(r => r.pctPending), backgroundColor: STATUS_COLORS.pending.fill, borderRadius: 4 },
+    { label: 'No Status', data: rows.map(r => r.pctBlank),   backgroundColor: STATUS_COLORS.blank.fill,   borderRadius: 4 },
+  ];
+
+  nState.areaChart = new Chart(canvas, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 12 } },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, padding: 12, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } },
+        datalabels: {
+          display: ctx => ctx.dataset.data[ctx.dataIndex] >= 8,
+          color: '#fff',
+          font: { family: "'Inter'", size: 10.5, weight: '700' },
+          formatter: v => v.toFixed(0) + '%'
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1, padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", size: 13, weight: '600' }, bodyFont: { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: {
+            title: ctx => rows[ctx[0].dataIndex].area + '  (Total: ' + rows[ctx[0].dataIndex].total + ')',
+            label: ctx => \` \${ctx.dataset.label}: \${ctx.raw.toFixed(1)}%\`
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, grid: { color: 'rgba(148,163,200,0.06)' }, ticks: { color: '#a8b3d1', font: { size: 10, family: "'JetBrains Mono'", weight: '500' }, callback: v => v + '%' }, min: 0, max: 100 },
+        y: { stacked: true, grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false }, ticks: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '600' } } }
+      }
+    }
+  });
+}
+
+function renderStatusPie(counts) {
+  const canvas = document.getElementById('nStatusPie');
+  if (!canvas) return;
+  if (nState.statusPie) nState.statusPie.destroy();
+
+  const keys = ['done','ongoing','pending','blank'];
+  const data = keys.map(k => counts[k]);
+  const colors = keys.map(k => STATUS_COLORS[k].fill);
+  const labels = keys.map(k => STATUS_COLORS[k].label);
+
+  nState.statusPie = new Chart(canvas, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: 'rgba(10,14,26,0.8)', borderWidth: 3, hoverOffset: 10 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '60%',
+      layout: { padding: 16 },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, padding: 14, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } },
+        datalabels: {
+          display: ctx => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const val = ctx.dataset.data[ctx.dataIndex];
+            return total && (val/total*100) >= 4;
+          },
+          color: '#fff',
+          font: { family: "'Inter'", size: 12, weight: '700' },
+          textStrokeColor: 'rgba(0,0,0,0.55)', textStrokeWidth: 3,
+          formatter: (val, ctx) => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const pct = total ? (val/total*100) : 0;
+            return pct.toFixed(1) + '%';
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1, padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", weight: '600', size: 13 }, bodyFont: { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: {
+            label: ctx => {
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              const pct = total ? (ctx.raw/total*100).toFixed(1) : 0;
+              return ' ' + ctx.raw + ' notes  (' + pct + '%)';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function renderStoreStatusChart(rows) {
+  const canvas = document.getElementById('nStoreChart');
+  if (!canvas) return;
+  if (nState.storeChart) nState.storeChart.destroy();
+
+  // Dynamic height for scrollable view
+  const wrap = document.getElementById('nStoreChartWrap');
+  const dynHeight = Math.max(320, rows.length * 28 + 40);
+  if (wrap) wrap.style.height = dynHeight + 'px';
+
+  const labels = rows.map(r => r.storeName);
+  const datasets = [
+    { label: 'Done',      data: rows.map(r => r.pctDone),    backgroundColor: STATUS_COLORS.done.fill,    borderRadius: 3 },
+    { label: 'Ongoing',   data: rows.map(r => r.pctOngoing), backgroundColor: STATUS_COLORS.ongoing.fill, borderRadius: 3 },
+    { label: 'Pending',   data: rows.map(r => r.pctPending), backgroundColor: STATUS_COLORS.pending.fill, borderRadius: 3 },
+    { label: 'No Status', data: rows.map(r => r.pctBlank),   backgroundColor: STATUS_COLORS.blank.fill,   borderRadius: 3 },
+  ];
+
+  nState.storeChart = new Chart(canvas, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 12 } },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, padding: 12, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } },
+        datalabels: {
+          display: ctx => ctx.dataset.data[ctx.dataIndex] >= 12,
+          color: '#fff',
+          font: { family: "'Inter'", size: 10, weight: '700' },
+          formatter: v => v.toFixed(0) + '%'
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1, padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", size: 13, weight: '600' }, bodyFont: { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: {
+            title: ctx => {
+              const r = rows[ctx[0].dataIndex];
+              return r.storeName + '  (Total: ' + r.total + ', Area: ' + r.area + ')';
+            },
+            label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.raw.toFixed(1) + '%'
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, grid: { color: 'rgba(148,163,200,0.06)' }, ticks: { color: '#a8b3d1', font: { size: 10, family: "'JetBrains Mono'", weight: '500' }, callback: v => v + '%' }, min: 0, max: 100 },
+        y: { stacked: true, grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false }, ticks: { color: '#a8b3d1', font: { size: 10.5, family: "'Inter'", weight: '500' }, autoSkip: false } }
+      }
+    }
+  });
+}
+
+function renderAreaStatusTable(rows) {
+  const tbody = document.getElementById('nAreaTableBody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell"><p>No data</p></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r,i) => {
+    const areaColor = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const rankBadge = rankBadgeHtml(i);
+    return \`<tr>
+      <td>\${rankBadge}</td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${areaColor};color:\${areaColor}"></span>\${r.area || '—'}</span></td>
+      <td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">\${r.total}</span></td>
+      <td style="text-align:center"><span class="status-pill done">\${r.pctDone.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill pending">\${r.pctPending.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill review">\${r.pctOngoing.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill default">\${r.pctBlank.toFixed(1)}%</span></td>
+    </tr>\`;
+  }).join('');
+}
+
+function renderStoreStatusTable(rows) {
+  const tbody = document.getElementById('nStoreTableBody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell"><p>No data</p></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r,i) => {
+    const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const rankBadge = rankBadgeHtml(i);
+    return \`<tr>
+      <td>\${rankBadge}</td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:28px;height:28px;font-size:10px">\${initials(r.storeName)}</div>
+          <div class="store-info">
+            <div class="store-name" style="font-size:12px">\${r.storeName || '—'}</div>
+            <div class="store-id">\${r.storeId ? '#'+r.storeId : ''}</div>
+          </div>
+        </div>
+      </td>
+      <td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">\${r.total}</span></td>
+      <td style="text-align:center"><span class="status-pill done">\${r.pctDone.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill pending">\${r.pctPending.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill review">\${r.pctOngoing.toFixed(1)}%</span></td>
+      <td style="text-align:center"><span class="status-pill default">\${r.pctBlank.toFixed(1)}%</span></td>
+    </tr>\`;
+  }).join('');
+}
+
+function rankBadgeHtml(idx) {
+  const rank = idx + 1;
+  if (rank === 1) return '<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1a0e00;font-weight:800;font-size:12px;font-family:\\'Space Grotesk\\'">1</span>';
+  if (rank === 2) return '<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#cbd5e1,#94a3b8);color:#0a0e1a;font-weight:800;font-size:12px;font-family:\\'Space Grotesk\\'">2</span>';
+  if (rank === 3) return '<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#d97706,#92400e);color:#fff;font-weight:800;font-size:12px;font-family:\\'Space Grotesk\\'">3</span>';
+  return '<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);color:var(--indigo2);font-weight:700;font-size:11.5px;font-family:\\'JetBrains Mono\\'">' + rank + '</span>';
 }
 
 function sortNotes(key, type) {

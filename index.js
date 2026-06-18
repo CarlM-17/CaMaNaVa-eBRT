@@ -1241,6 +1241,112 @@ select option{background:#1a1f2e;color:#e8ecf4}
 }
 .loading-msg{font-size:12.5px;color:var(--text-2);font-weight:500}
 
+/* ── Photo Lightbox ── */
+.lightbox{
+  position:fixed;inset:0;
+  background:rgba(5,7,14,0.92);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+  display:none;align-items:center;justify-content:center;
+  z-index:9999;
+  padding:30px;
+  animation:lbFadeIn .2s ease-out;
+}
+.lightbox.active{display:flex}
+@keyframes lbFadeIn{from{opacity:0}to{opacity:1}}
+.lightbox-content{
+  position:relative;
+  max-width:min(1200px, 95vw);
+  max-height:90vh;
+  display:flex;flex-direction:column;
+  background:rgba(20,26,42,0.6);
+  border:1px solid var(--border-strong);
+  border-radius:18px;overflow:hidden;
+  box-shadow:0 24px 80px -16px rgba(0,0,0,0.8);
+  animation:lbZoomIn .25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes lbZoomIn{from{transform:scale(0.92);opacity:0}to{transform:scale(1);opacity:1}}
+.lightbox-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px;
+  border-bottom:1px solid var(--border-soft);
+  background:rgba(15,20,35,0.8);
+  gap:14px;flex-shrink:0;
+}
+.lightbox-title{
+  font-family:'Space Grotesk',sans-serif;
+  font-size:14px;font-weight:600;color:var(--text-1);
+  display:flex;align-items:center;gap:10px;letter-spacing:-0.01em;
+  min-width:0;
+}
+.lightbox-title i{color:var(--indigo2);font-size:14px;flex-shrink:0}
+.lightbox-title-text{
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.lightbox-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.lightbox-btn{
+  background:var(--bg-glass);
+  border:1px solid var(--border-strong);
+  color:var(--text-2);
+  width:36px;height:36px;border-radius:9px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:14px;
+  transition:all .2s;text-decoration:none;
+}
+.lightbox-btn:hover{
+  background:var(--bg-elevated);color:var(--text-1);
+  border-color:var(--indigo);
+}
+.lightbox-btn.close-btn:hover{border-color:var(--rose);color:var(--rose2)}
+.lightbox-body{
+  position:relative;
+  flex:1;min-height:0;
+  display:flex;align-items:center;justify-content:center;
+  background:#0a0e1a;
+  overflow:hidden;
+}
+.lightbox-img{
+  max-width:100%;max-height:100%;
+  object-fit:contain;
+  display:block;
+  user-select:none;
+  -webkit-user-drag:none;
+}
+.lightbox-spinner{
+  position:absolute;
+  width:48px;height:48px;
+  border:3px solid transparent;
+  border-top-color:var(--indigo);
+  border-right-color:var(--cyan);
+  border-radius:50%;
+  animation:spin 1s linear infinite;
+  filter:drop-shadow(0 0 12px var(--indigo-glow));
+}
+.lightbox-error{
+  padding:40px 30px;text-align:center;color:var(--text-2);
+  display:none;flex-direction:column;align-items:center;gap:12px;
+}
+.lightbox-error i{font-size:36px;color:var(--amber);opacity:0.8}
+.lightbox-error.show{display:flex}
+.lightbox-error a{color:var(--indigo2);text-decoration:underline;font-size:12.5px}
+.lightbox-meta{
+  padding:12px 20px;
+  background:rgba(15,20,35,0.8);
+  border-top:1px solid var(--border-soft);
+  font-size:12px;color:var(--text-3);
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;flex-shrink:0;
+}
+.lightbox-meta-item{display:inline-flex;align-items:center;gap:5px}
+.lightbox-meta-item i{color:var(--text-dim);font-size:11px}
+@media(max-width:768px){
+  .lightbox{padding:12px}
+  .lightbox-content{max-width:100vw;max-height:95vh}
+  .lightbox-header{padding:10px 14px}
+  .lightbox-title{font-size:13px}
+  .lightbox-btn{width:34px;height:34px}
+  .lightbox-meta{font-size:11px;padding:10px 14px;gap:10px}
+}
+
 /* ── Store Notes specific ── */
 .status-pill{
   display:inline-flex;align-items:center;gap:6px;
@@ -1386,6 +1492,36 @@ select option{background:#1a1f2e;color:#e8ecf4}
     <div class="spinner"></div>
     <div class="loading-title">CaMaNaVa eBRT</div>
     <div class="loading-msg" id="loadingMsg">Connecting to Google Sheets...</div>
+  </div>
+</div>
+
+<!-- Photo Lightbox -->
+<div id="lightbox" class="lightbox" onclick="closeLightbox(event)" role="dialog" aria-modal="true" aria-labelledby="lbTitle">
+  <div class="lightbox-content" onclick="event.stopPropagation()">
+    <div class="lightbox-header">
+      <div class="lightbox-title">
+        <i class="fa fa-image"></i>
+        <span class="lightbox-title-text" id="lbTitle">Photo</span>
+      </div>
+      <div class="lightbox-actions">
+        <a id="lbOpenExternal" href="#" target="_blank" rel="noopener noreferrer" class="lightbox-btn" title="Open in new tab">
+          <i class="fa fa-arrow-up-right-from-square"></i>
+        </a>
+        <button class="lightbox-btn close-btn" onclick="closeLightbox()" title="Close (Esc)" aria-label="Close">
+          <i class="fa fa-xmark"></i>
+        </button>
+      </div>
+    </div>
+    <div class="lightbox-body">
+      <div class="lightbox-spinner" id="lbSpinner"></div>
+      <img id="lbImage" class="lightbox-img" alt="" style="display:none"/>
+      <div class="lightbox-error" id="lbError">
+        <i class="fa fa-triangle-exclamation"></i>
+        <div>Couldn't load the preview.</div>
+        <a id="lbErrorLink" href="#" target="_blank" rel="noopener noreferrer">Open in Google Drive instead →</a>
+      </div>
+    </div>
+    <div class="lightbox-meta" id="lbMeta"></div>
   </div>
 </div>
 
@@ -4118,6 +4254,86 @@ function isValidUrl(s) {
   return /^https?:\\/\\//i.test(s.trim());
 }
 
+// ─── Photo Lightbox ────────────────────────────────────────────────────────
+function driveDirectUrl(url) {
+  if (!url) return url;
+  try {
+    let id = null;
+    let m = url.match(/\\/file\\/d\\/([a-zA-Z0-9_-]{10,})/);
+    if (m) id = m[1];
+    if (!id) {
+      m = url.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+      if (m) id = m[1];
+    }
+    if (id) {
+      return 'https://drive.google.com/thumbnail?id=' + id + '&sz=w1600';
+    }
+  } catch(e) {}
+  return url;
+}
+
+function openLightbox(url, storeName, timestamp) {
+  if (!url) return;
+  const lb = document.getElementById('lightbox');
+  const img = document.getElementById('lbImage');
+  const spinner = document.getElementById('lbSpinner');
+  const errEl = document.getElementById('lbError');
+  const errLink = document.getElementById('lbErrorLink');
+  const titleEl = document.getElementById('lbTitle');
+  const meta = document.getElementById('lbMeta');
+  const openExt = document.getElementById('lbOpenExternal');
+
+  img.style.display = 'none';
+  img.src = '';
+  errEl.classList.remove('show');
+  spinner.style.display = 'block';
+
+  titleEl.textContent = storeName || 'Photo';
+  openExt.href = url;
+  errLink.href = url;
+
+  const metaParts = [];
+  if (storeName) metaParts.push('<span class="lightbox-meta-item"><i class="fa fa-store"></i> ' + storeName.replace(/</g,'&lt;') + '</span>');
+  if (timestamp) {
+    const d = new Date(timestamp);
+    const tsTxt = !isNaN(d.getTime())
+      ? d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true})
+      : timestamp;
+    metaParts.push('<span class="lightbox-meta-item"><i class="fa fa-clock"></i> ' + tsTxt + '</span>');
+  }
+  meta.innerHTML = metaParts.join('');
+
+  const directUrl = driveDirectUrl(url);
+  img.onload = () => {
+    spinner.style.display = 'none';
+    img.style.display = 'block';
+  };
+  img.onerror = () => {
+    spinner.style.display = 'none';
+    errEl.classList.add('show');
+  };
+  img.src = directUrl;
+
+  lb.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox(event) {
+  if (event && event.target && event.currentTarget && event.target !== event.currentTarget) return;
+  const lb = document.getElementById('lightbox');
+  lb.classList.remove('active');
+  document.body.style.overflow = '';
+  const img = document.getElementById('lbImage');
+  img.src = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const lb = document.getElementById('lightbox');
+    if (lb && lb.classList.contains('active')) closeLightbox();
+  }
+});
+
 function renderNotesTable(rows) {
   const tbody = document.getElementById('nTableBody');
   if (!rows.length) {
@@ -4133,8 +4349,11 @@ function renderNotesTable(rows) {
 
     // Prefer the resolved URL from column M (rich text hyperlink), fallback to column G
     const photoUrl = r.photoUrl || (r.photo && isValidUrl(r.photo) ? r.photo : null);
+    const safeUrl = photoUrl ? photoUrl.replace(/"/g,'&quot;').replace(/'/g,'&#39;') : '';
+    const safeStore = (r.storeName || '').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const safeTs = (r.timestamp || '').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const photoBtn = photoUrl
-      ? \`<a href="\${photoUrl.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer" class="photo-link-btn"><i class="fa fa-image"></i> Open Photo</a>\`
+      ? \`<button type="button" class="photo-link-btn" onclick="openLightbox('\${safeUrl}','\${safeStore}','\${safeTs}')"><i class="fa fa-image"></i> Open Photo</button>\`
       : \`<span class="photo-link-btn disabled"><i class="fa fa-image-portrait"></i> —</span>\`;
 
     const notes = (r.notes || '—').replace(/</g,'&lt;').replace(/>/g,'&gt;');

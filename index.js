@@ -11,6 +11,7 @@ const SHEET_NAME = 'DailySales';
 const DATA_RANGE = `${SHEET_NAME}!A23:R`;
 const STORE_LIST_RANGE = 'ListOfStores!A:E';
 const CATEGORY_RANGE = 'CategorySales!A:I';
+const STORE_NOTES_RANGE = 'StoreNotes!A:M';
 
 function getAuthClient() {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
@@ -32,33 +33,30 @@ function parseDate(s) {
   if (!s) return null;
   const parts = String(s).trim().split('/');
   if (parts.length === 3) {
-    const [m, d, y] = parts;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    const m = parts[0].padStart(2, '0');
+    const d = parts[1].padStart(2, '0');
+    const y = parts[2];
+    return y + '-' + m + '-' + d;
   }
   return null;
 }
 
 function monthKey(dateStr) {
-  // dateStr is YYYY-MM-DD
   if (!dateStr) return null;
-  return dateStr.substring(0, 7); // YYYY-MM
+  return dateStr.substring(0, 7);
 }
 
 function monthLabel(key) {
-  // key = YYYY-MM
   if (!key) return '';
   const [y, m] = key.split('-');
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  return `${monthNames[parseInt(m)-1]} ${y}`;
+  return monthNames[parseInt(m)-1] + ' ' + y;
 }
 
-// ─── Caches ─────────────────────────────────────────────────────────────────
-let storeListCache = null;
-let storeListCacheTime = 0;
-let salesCache = null;
-let salesCacheTime = 0;
-let categoryCache = null;
-let categoryCacheTime = 0;
+let storeListCache = null, storeListCacheTime = 0;
+let salesCache = null, salesCacheTime = 0;
+let categoryCache = null, categoryCacheTime = 0;
+let storeNotesCache = null, storeNotesCacheTime = 0;
 const CACHE_TTL = 5 * 60 * 1000;
 
 async function getMasterStoreList(sheets) {
@@ -115,9 +113,6 @@ async function getCategoryData(sheets) {
   if (categoryCache && (now - categoryCacheTime) < CACHE_TTL) return categoryCache;
   const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: CATEGORY_RANGE });
   const rows = response.data.values || [];
-
-  // Skip the first row (headers). Then map rows.
-  // Columns: A=Month, B=Area, C=Store Code, D=Store Name, E=SDep Code, F=Sub-Department Name, G=Sales, H=SalesYA, I=Category
   const data = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || [];
@@ -130,7 +125,6 @@ async function getCategoryData(sheets) {
     const sales     = parseNum(r[6]);
     const salesLY   = parseNum(r[7]);
     const category  = (r[8] || '').trim();
-    // skip blank rows
     if (!month && !storeCode && !category && !subDepName) continue;
     data.push({ month, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category });
   }
@@ -139,14 +133,44 @@ async function getCategoryData(sheets) {
   return categoryCache;
 }
 
+async function getStoreNotesData(sheets) {
+  const now = Date.now();
+  if (storeNotesCache && (now - storeNotesCacheTime) < CACHE_TTL) return storeNotesCache;
+  const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: STORE_NOTES_RANGE });
+  const rows = response.data.values || [];
+  const data = [];
+  // Skip header row (row index 0)
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    // Columns: A=ID, B=TimeStamp, C=StoreID, D=StoreName, E=Area, F=Notes, G=Photo, H=PhotoDraft, I=Submittedby, J=PhotoLink, K=Status, L=Remarks, M=Photo Link
+    const id          = (r[0] || '').trim();
+    const timestamp   = (r[1] || '').trim();
+    const storeId     = (r[2] || '').trim();
+    const storeName   = (r[3] || '').trim();
+    const area        = (r[4] || '').trim();
+    const notes       = (r[5] || '').trim();
+    const photo       = (r[6] || '').trim();
+    const photoDraft  = (r[7] || '').trim();
+    const submittedBy = (r[8] || '').trim();
+    const photoLink   = (r[9] || '').trim();
+    const status      = (r[10] || '').trim();
+    const remarks     = (r[11] || '').trim();
+    const photoLinkM  = (r[12] || '').trim();
+    // skip totally blank rows
+    if (!timestamp && !storeId && !notes) continue;
+    data.push({ id, timestamp, storeId, storeName, area, notes, photo, photoDraft, submittedBy, photoLink, status, remarks, photoLinkM });
+  }
+  storeNotesCache = data;
+  storeNotesCacheTime = now;
+  return storeNotesCache;
+}
+
 // ─── API: GET /api/sales ─────────────────────────────────────────────────────
 app.get('/api/sales', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-
     const [data, masterStores] = await Promise.all([getSalesData(sheets), getMasterStoreList(sheets)]);
-
     const { date, area, store } = req.query;
     let filtered = data;
     if (date) filtered = filtered.filter((r) => r.date === date);
@@ -155,10 +179,8 @@ app.get('/api/sales', async (req, res) => {
 
     const storeMap = {};
     filtered.forEach((r) => {
-      const key = `${r.storeId}_${r.storeName}`;
-      if (!storeMap[key]) {
-        storeMap[key] = { storeId: r.storeId, storeName: r.storeName, area: r.area, sales: 0, salesLY: 0, trx: 0, trxLY: 0, justifications: [] };
-      }
+      const key = r.storeId + '_' + r.storeName;
+      if (!storeMap[key]) storeMap[key] = { storeId: r.storeId, storeName: r.storeName, area: r.area, sales: 0, salesLY: 0, trx: 0, trxLY: 0, justifications: [] };
       storeMap[key].sales += r.sales;
       storeMap[key].salesLY += r.salesLY;
       storeMap[key].trx += r.trx;
@@ -166,18 +188,16 @@ app.get('/api/sales', async (req, res) => {
       if (r.justification) storeMap[key].justifications.push(r.justification);
     });
 
-    const result = Object.values(storeMap)
-      .map((r) => {
-        const diffVal = r.sales - r.salesLY;
-        const diffPct = r.salesLY !== 0 ? (diffVal / r.salesLY) * 100 : 0;
-        return {
-          storeId: r.storeId, storeName: r.storeName, area: r.area,
-          sales: r.sales, salesLY: r.salesLY, trx: r.trx, trxLY: r.trxLY,
-          diffVal, diffPct: parseFloat(diffPct.toFixed(2)),
-          justification: [...new Set(r.justifications)].join(' | '),
-        };
-      })
-      .sort((a, b) => b.sales - a.sales);
+    const result = Object.values(storeMap).map((r) => {
+      const diffVal = r.sales - r.salesLY;
+      const diffPct = r.salesLY !== 0 ? (diffVal / r.salesLY) * 100 : 0;
+      return {
+        storeId: r.storeId, storeName: r.storeName, area: r.area,
+        sales: r.sales, salesLY: r.salesLY, trx: r.trx, trxLY: r.trxLY,
+        diffVal, diffPct: parseFloat(diffPct.toFixed(2)),
+        justification: [...new Set(r.justifications)].join(' | '),
+      };
+    }).sort((a, b) => b.sales - a.sales);
 
     const reportedStoreIds = new Set(result.map(r => r.storeId));
     let missing = [];
@@ -190,15 +210,13 @@ app.get('/api/sales', async (req, res) => {
         .map(s => ({ storeId: s.storeId, storeName: s.storeName, area: s.area, region: s.region, remarks: s.remarks }))
         .sort((a, b) => a.storeName.localeCompare(b.storeName));
     }
-
     res.json({ success: true, count: result.length, rows: result, missing, totalMasterStores: masterStores.length });
   } catch (err) {
-    console.error('Sheets API error:', err.message);
+    console.error('Sales API error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ─── API: GET /api/filters ───────────────────────────────────────────────────
 app.get('/api/filters', async (req, res) => {
   try {
     const auth = getAuthClient();
@@ -220,7 +238,6 @@ app.get('/api/filters', async (req, res) => {
   }
 });
 
-// ─── API: GET /api/months ───────────────────────────────────────────────────
 app.get('/api/months', async (req, res) => {
   try {
     const auth = getAuthClient();
@@ -236,13 +253,11 @@ app.get('/api/months', async (req, res) => {
   }
 });
 
-// ─── API: GET /api/monthly ──────────────────────────────────────────────────
 app.get('/api/monthly', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
     const data = await getSalesData(sheets);
-
     const { month, area, store, sign } = req.query;
 
     let filtered = data;
@@ -250,13 +265,10 @@ app.get('/api/monthly', async (req, res) => {
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
-    // ── Summary by store ──
     const storeMap = {};
     filtered.forEach(r => {
-      const key = `${r.storeId}_${r.storeName}`;
-      if (!storeMap[key]) {
-        storeMap[key] = { storeId: r.storeId, storeName: r.storeName, area: r.area, sales: 0, salesLY: 0 };
-      }
+      const key = r.storeId + '_' + r.storeName;
+      if (!storeMap[key]) storeMap[key] = { storeId: r.storeId, storeName: r.storeName, area: r.area, sales: 0, salesLY: 0 };
       storeMap[key].sales += r.sales;
       storeMap[key].salesLY += r.salesLY;
     });
@@ -266,8 +278,6 @@ app.get('/api/monthly', async (req, res) => {
       return { ...r, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     }).sort((a, b) => b.sales - a.sales);
 
-    // ── Detail (one row per record) ──
-    // Apply sign filter for detail only
     let detailRecords = filtered;
     if (sign === 'POS') detailRecords = detailRecords.filter(r => (r.sales - r.salesLY) > 0);
     if (sign === 'NEG') detailRecords = detailRecords.filter(r => (r.sales - r.salesLY) < 0);
@@ -276,25 +286,17 @@ app.get('/api/monthly', async (req, res) => {
       const diffVal = r.sales - r.salesLY;
       const diffPct = r.salesLY !== 0 ? (diffVal / r.salesLY) * 100 : 0;
       return {
-        date: r.date,
-        day: r.day,
-        dayYA: r.dayYA,
-        storeId: r.storeId,
-        storeName: r.storeName,
-        area: r.area,
-        sales: r.sales,
-        salesLY: r.salesLY,
-        diffVal,
-        diffPct: parseFloat(diffPct.toFixed(2)),
+        date: r.date, day: r.day, dayYA: r.dayYA,
+        storeId: r.storeId, storeName: r.storeName, area: r.area,
+        sales: r.sales, salesLY: r.salesLY,
+        diffVal, diffPct: parseFloat(diffPct.toFixed(2)),
         justification: r.justification || '',
       };
     }).sort((a, b) => {
-      // Sort by date asc, then store asc
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.storeName || '').localeCompare(b.storeName || '');
     });
 
-    // ── Daily trend (no sign filter applied here, total only) ──
     const trendMap = {};
     filtered.forEach(r => {
       if (!trendMap[r.date]) trendMap[r.date] = { date: r.date, sales: 0, salesLY: 0 };
@@ -312,19 +314,15 @@ app.get('/api/monthly', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// ─── API: GET /api/category-filters ─────────────────────────────────────────
 app.get('/api/category-filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
     const data = await getCategoryData(sheets);
     const { area: filterArea } = req.query;
-
-    // Preserve month order from sheet (it's typically in calendar order)
     const monthSet = [];
     const seenMonths = new Set();
     data.forEach(r => { if (r.month && !seenMonths.has(r.month)) { seenMonths.add(r.month); monthSet.push(r.month); } });
-
     const categories = new Set();
     const areas = new Set();
     const stores = new Set();
@@ -335,26 +333,18 @@ app.get('/api/category-filters', async (req, res) => {
         if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
       }
     });
-    res.json({
-      success: true,
-      months: monthSet,
-      categories: [...categories].sort(),
-      areas: [...areas].sort(),
-      stores: [...stores].sort(),
-    });
+    res.json({ success: true, months: monthSet, categories: [...categories].sort(), areas: [...areas].sort(), stores: [...stores].sort() });
   } catch (err) {
     console.error('Category-filters error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ─── API: GET /api/category ─────────────────────────────────────────────────
 app.get('/api/category', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
     const data = await getCategoryData(sheets);
-
     const { month, category, area, store, sign } = req.query;
     let filtered = data;
     if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
@@ -362,7 +352,6 @@ app.get('/api/category', async (req, res) => {
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
-    // ── Category Summary ───────────────────────────────────────────────────
     const catMap = {};
     filtered.forEach(r => {
       const cat = r.category || '(uncategorized)';
@@ -377,17 +366,12 @@ app.get('/api/category', async (req, res) => {
       const diffPct = c.salesLY !== 0 ? (diffVal / c.salesLY) * 100 : 0;
       const shareCur = totalSales !== 0 ? (c.sales / totalSales) * 100 : 0;
       return {
-        category: c.category,
-        subDepCount: c.subDeps.size,
-        sales: c.sales,
-        salesLY: c.salesLY,
-        diffVal,
-        diffPct: parseFloat(diffPct.toFixed(2)),
-        shareCur: parseFloat(shareCur.toFixed(2)),
+        category: c.category, subDepCount: c.subDeps.size,
+        sales: c.sales, salesLY: c.salesLY,
+        diffVal, diffPct: parseFloat(diffPct.toFixed(2)), shareCur: parseFloat(shareCur.toFixed(2)),
       };
     }).sort((a, b) => b.sales - a.sales);
 
-    // ── By Area ────────────────────────────────────────────────────────────
     const areaMap = {};
     filtered.forEach(r => {
       if (!r.area) return;
@@ -401,7 +385,6 @@ app.get('/api/category', async (req, res) => {
       return { ...a, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     }).sort((a, b) => b.sales - a.sales);
 
-    // ── By Store ───────────────────────────────────────────────────────────
     const storeMap = {};
     filtered.forEach(r => {
       if (!r.storeCode) return;
@@ -416,7 +399,6 @@ app.get('/api/category', async (req, res) => {
       return { ...s, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     }).sort((a, b) => b.sales - a.sales);
 
-    // ── SubDeps grouped by category (for breakdown dropdown) ───────────────
     const subDepsByCategory = {};
     filtered.forEach(r => {
       if (!r.category || !r.subDepName) return;
@@ -426,20 +408,13 @@ app.get('/api/category', async (req, res) => {
     const subDepsByCategoryOut = {};
     Object.entries(subDepsByCategory).forEach(([k,v]) => { subDepsByCategoryOut[k] = [...v].sort(); });
 
-    // ── Sub-Department Detail ──────────────────────────────────────────────
-    // Aggregate by (category, storeCode, storeName, subDepName) so each row is one store's sub-dept
     const subMap = {};
     filtered.forEach(r => {
       const key = (r.category || '') + '||' + (r.storeCode || '') + '||' + (r.subDepName || '');
       if (!subMap[key]) subMap[key] = {
-        category: r.category,
-        storeCode: r.storeCode,
-        storeName: r.storeName,
-        area: r.area,
-        subDepName: r.subDepName,
-        sdepCode: r.sdepCode,
-        sales: 0,
-        salesLY: 0,
+        category: r.category, storeCode: r.storeCode, storeName: r.storeName,
+        area: r.area, subDepName: r.subDepName, sdepCode: r.sdepCode,
+        sales: 0, salesLY: 0,
       };
       subMap[key].sales   += r.sales;
       subMap[key].salesLY += r.salesLY;
@@ -450,7 +425,6 @@ app.get('/api/category', async (req, res) => {
       return { ...s, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     });
 
-    // Movers calculated BEFORE sign filter - aggregate by subDepName only (no store breakdown for movers)
     const moversAgg = {};
     detail.forEach(r => {
       const key = r.subDepName || '';
@@ -479,14 +453,11 @@ app.get('/api/category', async (req, res) => {
   }
 });
 
-// ─── API: GET /api/category-breakdown ───────────────────────────────────────
-// Returns byArea + byStore tables with extra Category & Sub-Department filters
 app.get('/api/category-breakdown', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
     const data = await getCategoryData(sheets);
-
     const { month, category, area, store, breakdownCategory, breakdownSubDep } = req.query;
     let filtered = data;
     if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
@@ -496,7 +467,6 @@ app.get('/api/category-breakdown', async (req, res) => {
     if (breakdownCategory && breakdownCategory !== 'ALL') filtered = filtered.filter(r => r.category === breakdownCategory);
     if (breakdownSubDep && breakdownSubDep !== 'ALL') filtered = filtered.filter(r => r.subDepName === breakdownSubDep);
 
-    // By Area
     const areaMap = {};
     filtered.forEach(r => {
       if (!r.area) return;
@@ -510,7 +480,6 @@ app.get('/api/category-breakdown', async (req, res) => {
       return { ...a, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
     }).sort((a, b) => b.sales - a.sales);
 
-    // By Store
     const storeMap = {};
     filtered.forEach(r => {
       if (!r.storeCode) return;
@@ -532,39 +501,25 @@ app.get('/api/category-breakdown', async (req, res) => {
   }
 });
 
-// ─── API: GET /api/averages ─────────────────────────────────────────────────
-// Returns average daily sales per store and per area
-// Excludes records with blank sales (= 0) and any record dated January 1
 app.get('/api/averages', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
     const data = await getSalesData(sheets);
-
     const { area, store } = req.query;
-
-    // Filter: exclude January 1 records and blank sales
     let filtered = data.filter(r => {
       if (!r.date || !r.sales || r.sales <= 0) return false;
-      // r.date is YYYY-MM-DD; check month-day != 01-01
       const mmdd = r.date.substring(5);
       if (mmdd === '01-01') return false;
       return true;
     });
-
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
-    // Per-store averages: sum / number of distinct days that store had data
     const storeStats = {};
     filtered.forEach(r => {
       const key = r.storeId + '_' + r.storeName;
-      if (!storeStats[key]) {
-        storeStats[key] = {
-          storeId: r.storeId, storeName: r.storeName, area: r.area,
-          total: 0, days: new Set(),
-        };
-      }
+      if (!storeStats[key]) storeStats[key] = { storeId: r.storeId, storeName: r.storeName, area: r.area, total: 0, days: new Set() };
       storeStats[key].total += r.sales;
       storeStats[key].days.add(r.date);
     });
@@ -574,12 +529,9 @@ app.get('/api/averages', async (req, res) => {
       total: s.total, dayCount: s.days.size,
     })).sort((a, b) => b.avg - a.avg);
 
-    // Per-area averages: sum / number of distinct (date, store) combos
     const areaStats = {};
     filtered.forEach(r => {
-      if (!areaStats[r.area]) {
-        areaStats[r.area] = { area: r.area, total: 0, count: 0, days: new Set() };
-      }
+      if (!areaStats[r.area]) areaStats[r.area] = { area: r.area, total: 0, count: 0, days: new Set() };
       areaStats[r.area].total += r.sales;
       areaStats[r.area].count += 1;
       areaStats[r.area].days.add(r.date);
@@ -597,6 +549,68 @@ app.get('/api/averages', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// ─── API: GET /api/store-notes ──────────────────────────────────────────────
+app.get('/api/store-notes', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const data = await getStoreNotesData(sheets);
+    const { area, store, status, q } = req.query;
+    let filtered = data;
+    if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
+    if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
+    if (status && status !== 'ALL') filtered = filtered.filter(r => r.status === status);
+    if (q) {
+      const needle = q.toLowerCase();
+      filtered = filtered.filter(r =>
+        (r.notes || '').toLowerCase().includes(needle) ||
+        (r.storeName || '').toLowerCase().includes(needle) ||
+        (r.remarks || '').toLowerCase().includes(needle)
+      );
+    }
+    // Sort newest first by parsed timestamp
+    filtered.sort((a, b) => {
+      const ad = new Date(a.timestamp).getTime() || 0;
+      const bd = new Date(b.timestamp).getTime() || 0;
+      return bd - ad;
+    });
+    res.json({ success: true, count: filtered.length, rows: filtered });
+  } catch (err) {
+    console.error('Store-notes error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── API: GET /api/store-notes-filters ──────────────────────────────────────
+app.get('/api/store-notes-filters', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const data = await getStoreNotesData(sheets);
+    const { area: filterArea } = req.query;
+    const areas = new Set();
+    const stores = new Set();
+    const statuses = new Set();
+    data.forEach(r => {
+      if (r.area) areas.add(r.area);
+      if (r.status) statuses.add(r.status);
+      if (r.storeName) {
+        if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
+      }
+    });
+    res.json({
+      success: true,
+      areas: [...areas].sort(),
+      stores: [...stores].sort(),
+      statuses: [...statuses].sort(),
+    });
+  } catch (err) {
+    console.error('Store-notes-filters error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 const HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -935,7 +949,7 @@ td{
   vertical-align:middle;white-space:nowrap;
   font-size:13px;
 }
-td:has(.just-full){white-space:normal}
+td:has(.just-full),td:has(.notes-cell),td:has(.remarks-cell){white-space:normal}
 tr:last-child td{border-bottom:none}
 tbody tr{transition:background .15s}
 tbody tr:hover td{background:rgba(99,102,241,0.04)}
@@ -1177,6 +1191,65 @@ select option{background:#1a1f2e;color:#e8ecf4}
 }
 .loading-msg{font-size:12.5px;color:var(--text-2);font-weight:500}
 
+/* ── Store Notes specific ── */
+.status-pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 11px;border-radius:8px;
+  font-size:11px;font-weight:600;
+  font-family:'Inter',sans-serif;letter-spacing:-0.01em;
+  white-space:nowrap;
+}
+.status-pill.done,.status-pill.completed,.status-pill.closed,.status-pill.resolved{
+  background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:var(--emerald2);
+}
+.status-pill.pending,.status-pill.open,.status-pill.inprogress,.status-pill.ongoing{
+  background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);color:var(--amber2);
+}
+.status-pill.urgent,.status-pill.cancelled,.status-pill.failed,.status-pill.rejected{
+  background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.3);color:var(--rose2);
+}
+.status-pill.review,.status-pill.draft,.status-pill.new{
+  background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.3);color:var(--indigo2);
+}
+.status-pill.default{
+  background:rgba(148,163,200,0.08);border:1px solid var(--border-strong);color:var(--text-2);
+}
+.photo-link-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:6px 12px;border-radius:8px;
+  background:linear-gradient(135deg, var(--indigo), #4f46e5);
+  color:#fff;font-size:11.5px;font-weight:600;
+  text-decoration:none;
+  border:none;cursor:pointer;
+  transition:all .2s;letter-spacing:-0.01em;
+  box-shadow:0 2px 8px -2px var(--indigo-glow);
+  font-family:'Inter',sans-serif;
+}
+.photo-link-btn:hover{
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px -2px var(--indigo-glow);
+}
+.photo-link-btn.disabled{
+  background:rgba(148,163,200,0.08);
+  color:var(--text-3);
+  cursor:default;
+  box-shadow:none;
+  border:1px solid var(--border-strong);
+}
+.photo-link-btn.disabled:hover{transform:none}
+.notes-cell{
+  max-width:340px;white-space:normal;word-wrap:break-word;
+  color:var(--text-2);font-size:12.5px;line-height:1.45;font-weight:400;
+}
+.remarks-cell{
+  max-width:240px;white-space:normal;word-wrap:break-word;
+  color:var(--text-3);font-size:11.5px;line-height:1.4;font-style:italic;
+}
+.timestamp-cell{
+  white-space:nowrap;font-family:'JetBrains Mono',monospace;
+  font-size:11.5px;color:var(--text-2);font-weight:500;
+}
+
 /* ── Mobile performance ── */
 @media (max-width: 768px) {
   /* Kill backdrop-filter on mobile — biggest perf win */
@@ -1287,6 +1360,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
     </button>
     <button class="tab-btn" data-tab="category" onclick="switchTab('category')">
       <i class="fa fa-tags"></i> Category Sales
+    </button>
+    <button class="tab-btn" data-tab="notes" onclick="switchTab('notes')">
+      <i class="fa fa-note-sticky"></i> Store Notes
     </button>
   </div>
 
@@ -1840,6 +1916,69 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-category -->
 
+  <!-- ═══════════════════ STORE NOTES TAB ═══════════════════ -->
+  <div class="tab-content" id="tab-notes">
+
+    <!-- Controls -->
+    <div class="controls">
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-layer-group"></i> Area</span>
+        <select id="nAreaFilter" onchange="onNAreaChange()">
+          <option value="ALL">All Areas</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-store"></i> Store</span>
+        <select id="nStoreFilter" onchange="applyNotesFilters()">
+          <option value="ALL">All Stores</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
+        <select id="nStatusFilter" onchange="applyNotesFilters()">
+          <option value="ALL">All Statuses</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group" style="flex:1;min-width:180px">
+        <span class="ctrl-label"><i class="fa fa-magnifying-glass"></i> Search</span>
+        <input type="text" id="nSearch" placeholder="Search notes, store, remarks..." oninput="debouncedNotesSearch()" style="background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);color:var(--text-1);padding:9px 14px;border-radius:10px;font-size:13px;font-family:'Inter',sans-serif;font-weight:500;outline:none;flex:1;min-width:160px"/>
+      </div>
+      <div class="records-count" id="nRecordsCount">—</div>
+    </div>
+
+    <!-- Notes Table -->
+    <div class="table-card">
+      <div class="table-header">
+        <div class="table-title"><i class="fa fa-note-sticky"></i> Store Notes</div>
+        <div class="table-date" id="nTableInfo">Latest entries</div>
+      </div>
+      <div class="table-wrap" style="max-height:720px">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort-key="timestamp" data-sort-type="string" onclick="sortNotes('timestamp','string')">Time Stamp <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeId" data-sort-type="string" onclick="sortNotes('storeId','string')">Store ID <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortNotes('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortNotes('area','string')">Area <span class="sort-icon">⇅</span></th>
+              <th>Notes</th>
+              <th style="text-align:center">Photo</th>
+              <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortNotes('status','string')">Status <span class="sort-icon">⇅</span></th>
+              <th>Remarks</th>
+              <th style="text-align:center">Photo Link</th>
+            </tr>
+          </thead>
+          <tbody id="nTableBody">
+            <tr><td colspan="9" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-notes -->
+
 </main>
 
 <script>
@@ -1922,6 +2061,9 @@ function switchTab(tab) {
   }
   if (tab === 'category' && !cFilters.categories.length) {
     initCategoryTab();
+  }
+  if (tab === 'notes' && !nState.initialized) {
+    initNotesTab();
   }
 }
 
@@ -3670,6 +3812,189 @@ function exportCategoryToExcel() {
   XLSX.writeFile(wb, parts.join('_') + '.xlsx');
 }
 
+// ═══════════════════════ STORE NOTES TAB ═══════════════════════════════════
+const nState = {
+  initialized: false,
+  rows: [],
+  filters: { areas: [], stores: [], statuses: [] },
+  sort: { key: 'timestamp', dir: 'desc', type: 'string' },
+};
+
+async function initNotesTab() {
+  try {
+    const res = await fetch('/api/store-notes-filters');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+    nState.filters = json;
+
+    const aSel = document.getElementById('nAreaFilter');
+    aSel.innerHTML = '<option value="ALL">All Areas</option>';
+    json.areas.forEach(a => {
+      const o = document.createElement('option');
+      o.value = o.textContent = a;
+      aSel.appendChild(o);
+    });
+
+    populateNStores(json.stores);
+
+    const stSel = document.getElementById('nStatusFilter');
+    stSel.innerHTML = '<option value="ALL">All Statuses</option>';
+    json.statuses.forEach(s => {
+      const o = document.createElement('option');
+      o.value = o.textContent = s;
+      stSel.appendChild(o);
+    });
+
+    nState.initialized = true;
+    await applyNotesFilters();
+  } catch(e) {
+    console.error('Notes init error:', e);
+    document.getElementById('nTableBody').innerHTML =
+      \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function populateNStores(stores) {
+  const sel = document.getElementById('nStoreFilter');
+  sel.innerHTML = '<option value="ALL">All Stores</option>';
+  stores.forEach(s => {
+    const o = document.createElement('option');
+    o.value = o.textContent = s;
+    sel.appendChild(o);
+  });
+}
+
+async function onNAreaChange() {
+  const area = document.getElementById('nAreaFilter').value;
+  if (area === 'ALL') {
+    populateNStores(nState.filters.stores);
+  } else {
+    try {
+      const res = await fetch('/api/store-notes-filters?area=' + encodeURIComponent(area));
+      const json = await res.json();
+      if (json.success) populateNStores(json.stores);
+    } catch(e) {}
+  }
+  document.getElementById('nStoreFilter').value = 'ALL';
+  await applyNotesFilters();
+}
+
+let _notesSearchTimer = null;
+function debouncedNotesSearch() {
+  clearTimeout(_notesSearchTimer);
+  _notesSearchTimer = setTimeout(applyNotesFilters, 300);
+}
+
+async function applyNotesFilters() {
+  const area   = document.getElementById('nAreaFilter').value;
+  const store  = document.getElementById('nStoreFilter').value;
+  const status = document.getElementById('nStatusFilter').value;
+  const q      = document.getElementById('nSearch').value.trim();
+
+  const params = new URLSearchParams();
+  if (area !== 'ALL') params.set('area', area);
+  if (store !== 'ALL') params.set('store', store);
+  if (status !== 'ALL') params.set('status', status);
+  if (q) params.set('q', q);
+
+  try {
+    const res = await fetch('/api/store-notes?' + params);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+    nState.rows = json.rows || [];
+    document.getElementById('nRecordsCount').innerHTML = \`<span>\${nState.rows.length}</span> note\${nState.rows.length!==1?'s':''}\`;
+    renderNotesTable(sortRows(nState.rows, nState.sort));
+    updateSortHeaders('nTableBody', nState.sort);
+  } catch(e) {
+    console.error(e);
+    document.getElementById('nTableBody').innerHTML =
+      \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function statusClass(status) {
+  if (!status) return 'default';
+  const s = status.toLowerCase().replace(/[\\s_-]/g, '');
+  if (['done','completed','closed','resolved','complete','finished'].includes(s)) return 'done';
+  if (['pending','open','inprogress','ongoing','progress'].includes(s)) return 'pending';
+  if (['urgent','cancelled','canceled','failed','rejected','critical'].includes(s)) return 'urgent';
+  if (['review','draft','new','submitted'].includes(s)) return 'review';
+  return 'default';
+}
+
+function statusIcon(status) {
+  const s = (status || '').toLowerCase();
+  if (s.includes('done') || s.includes('complete') || s.includes('closed') || s.includes('resolved')) return 'fa-circle-check';
+  if (s.includes('pending') || s.includes('progress') || s.includes('ongoing') || s.includes('open')) return 'fa-clock';
+  if (s.includes('urgent') || s.includes('cancel') || s.includes('fail') || s.includes('reject')) return 'fa-circle-exclamation';
+  if (s.includes('review') || s.includes('draft') || s.includes('new') || s.includes('submit')) return 'fa-eye';
+  return 'fa-circle';
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts; // return raw if can't parse
+  const date = d.toLocaleDateString('en-PH', { month:'short', day:'numeric', year:'numeric' });
+  const time = d.toLocaleTimeString('en-PH', { hour:'numeric', minute:'2-digit', hour12:true });
+  return \`\${date}<br><span style="color:var(--text-3);font-size:10.5px">\${time}</span>\`;
+}
+
+function isValidUrl(s) {
+  if (!s) return false;
+  return /^https?:\\/\\//i.test(s.trim());
+}
+
+function renderNotesTable(rows) {
+  const tbody = document.getElementById('nTableBody');
+  if (!rows.length) {
+    tbody.innerHTML = \`<tr><td colspan="9" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No notes found</p><small>Try adjusting your filters</small></td></tr>\`;
+    return;
+  }
+
+  const html = rows.map(r => {
+    const areaColor = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const stCls = statusClass(r.status);
+    const stIcon = statusIcon(r.status);
+    const photoUrl = r.photo && isValidUrl(r.photo) ? r.photo : null;
+    const photoBtn = photoUrl
+      ? \`<a href="\${photoUrl.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer" class="photo-link-btn"><i class="fa fa-image"></i> View</a>\`
+      : \`<span class="photo-link-btn disabled"><i class="fa fa-image-portrait"></i> —</span>\`;
+    const notes = (r.notes || '—').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const remarks = (r.remarks || '—').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    return \`<tr>
+      <td><div class="timestamp-cell">\${formatTimestamp(r.timestamp)}</div></td>
+      <td><span class="num num-bold" style="color:var(--text-1)">#\${r.storeId || '—'}</span></td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:32px;height:32px;font-size:11px">\${initials(r.storeName)}</div>
+          <div class="store-info">
+            <div class="store-name" style="font-size:12.5px">\${r.storeName || '—'}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${areaColor};color:\${areaColor}"></span>\${r.area || '—'}</span></td>
+      <td><div class="notes-cell">\${notes}</div></td>
+      <td style="text-align:center">\${photoBtn}</td>
+      <td><span class="status-pill \${stCls}"><i class="fa \${stIcon}"></i> \${r.status || '—'}</span></td>
+      <td><div class="remarks-cell">\${remarks}</div></td>
+      <td style="text-align:center">\${photoBtn}</td>
+    </tr>\`;
+  }).join('');
+
+  tbody.innerHTML = html;
+}
+
+function sortNotes(key, type) {
+  if (nState.sort.key === key) nState.sort.dir = nState.sort.dir === 'asc' ? 'desc' : 'asc';
+  else nState.sort = { key, dir: 'desc', type };
+  nState.sort.type = type;
+  renderNotesTable(sortRows(nState.rows, nState.sort));
+  updateSortHeaders('nTableBody', nState.sort);
+}
+
 function setStatus(type, text) {
   const b = document.getElementById('statusBadge');
   b.className = 'badge ' + (type==='live' ? 'live' : type==='error' ? 'error' : 'loading-badge');
@@ -3698,4 +4023,4 @@ loadFilters();
 app.get('/', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(HTML); });
 app.get('*', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(HTML); });
 
-app.listen(PORT, () => console.log(`CaMaNaVa eBRT running on port ${PORT}`));
+app.listen(PORT, () => console.log('CaMaNaVa eBRT running on port ' + PORT));

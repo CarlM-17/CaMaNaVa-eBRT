@@ -812,7 +812,7 @@ body::after{
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.4;transform:scale(0.85)}}
 
 /* ── Main ── */
-.main{padding:28px 32px 40px;max-width:1480px;margin:0 auto}
+.main{padding:24px 28px 40px;max-width:1800px;margin:0 auto;width:100%}
 
 /* ── Controls ── */
 .controls{
@@ -969,13 +969,13 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6) sepia(1) 
 }
 .table-date{font-size:12px;color:var(--text-2);font-weight:500;font-family:'JetBrains Mono',monospace;padding:5px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px}
 .table-wrap{overflow-x:auto;max-height:600px;overflow-y:auto}
-table{width:100%;border-collapse:collapse;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:14px;table-layout:auto}
 th{
   background:rgba(15,20,35,0.85);
   backdrop-filter:blur(10px);
-  padding:13px 16px;text-align:left;
-  font-size:10px;font-weight:700;color:var(--text-3);
-  text-transform:uppercase;letter-spacing:0.12em;
+  padding:14px 18px;text-align:left;
+  font-size:11px;font-weight:700;color:var(--text-3);
+  text-transform:uppercase;letter-spacing:0.1em;
   white-space:nowrap;border-bottom:1px solid var(--border-soft);
   position:sticky;top:0;z-index:5;
 }
@@ -986,7 +986,7 @@ th.sortable{
 }
 th.sortable:hover{color:var(--indigo2);background:rgba(99,102,241,0.06)}
 th.sortable .sort-icon{
-  display:inline-block;margin-left:5px;font-size:9px;
+  display:inline-block;margin-left:5px;font-size:10px;
   opacity:0.35;transition:opacity .15s;color:var(--text-3);
 }
 th.sortable:hover .sort-icon{opacity:0.6}
@@ -995,44 +995,44 @@ th.sortable.sort-desc .sort-icon{opacity:1;color:var(--indigo2)}
 th.sortable.sort-asc,
 th.sortable.sort-desc{color:var(--indigo2)}
 td{
-  padding:13px 16px;border-bottom:1px solid var(--border-soft);
+  padding:14px 18px;border-bottom:1px solid var(--border-soft);
   vertical-align:middle;white-space:nowrap;
-  font-size:13px;
+  font-size:14px;
 }
 td:has(.just-full),td:has(.notes-cell),td:has(.remarks-cell){white-space:normal}
 tr:last-child td{border-bottom:none}
 tbody tr{transition:background .15s}
 tbody tr:hover td{background:rgba(99,102,241,0.04)}
 
-.store-cell{display:flex;align-items:center;gap:11px}
+.store-cell{display:flex;align-items:center;gap:12px}
 .store-avatar{
-  width:36px;height:36px;border-radius:10px;
+  width:40px;height:40px;border-radius:11px;
   display:flex;align-items:center;justify-content:center;
   font-family:'Space Grotesk',sans-serif;
-  font-size:12px;font-weight:600;color:#fff;
+  font-size:13px;font-weight:600;color:#fff;
   flex-shrink:0;letter-spacing:-0.5px;
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.15);
 }
-.store-info{display:flex;flex-direction:column;gap:1px}
-.store-name{font-weight:600;color:var(--text-1);font-size:13.5px;letter-spacing:-0.01em}
-.store-id{font-size:10.5px;color:var(--text-3);font-family:'JetBrains Mono',monospace;font-weight:500}
+.store-info{display:flex;flex-direction:column;gap:2px}
+.store-name{font-weight:600;color:var(--text-1);font-size:14.5px;letter-spacing:-0.01em}
+.store-id{font-size:11.5px;color:var(--text-3);font-family:'JetBrains Mono',monospace;font-weight:500;margin-top:2px}
 
 .area-tag{
-  display:inline-flex;align-items:center;gap:7px;
-  font-size:12px;color:var(--text-2);white-space:nowrap;
-  padding:5px 11px;border-radius:8px;
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:13px;color:var(--text-2);white-space:nowrap;
+  padding:6px 12px;border-radius:8px;
   background:rgba(99,148,255,0.06);border:1px solid rgba(99,148,255,0.12);
   font-weight:500;
 }
-.area-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;box-shadow:0 0 8px currentColor}
+.area-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 8px currentColor}
 
-.num{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:500;letter-spacing:-0.01em}
+.num{font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:500;letter-spacing:-0.01em}
 .num-bold{font-weight:600}
 
 .pill{
   display:inline-flex;align-items:center;gap:4px;
-  padding:5px 11px;border-radius:8px;
-  font-size:11.5px;font-weight:600;
+  padding:5px 12px;border-radius:8px;
+  font-size:12.5px;font-weight:600;
   font-family:'JetBrains Mono',monospace;letter-spacing:-0.01em;
 }
 .pill.up{background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:var(--emerald2);box-shadow:0 0 12px -4px var(--emerald-glow)}
@@ -1100,8 +1100,8 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
 /* ── Justification full-text cell (no truncation) ── */
 .just-full{
-  white-space:normal;color:var(--text-2);font-size:12px;
-  line-height:1.5;font-style:italic;max-width:380px;font-weight:400;
+  white-space:normal;color:var(--text-2);font-size:13px;
+  line-height:1.5;font-style:italic;max-width:none;font-weight:400;
 }
 
 /* ── Sign filter toggle group ── */
@@ -1243,9 +1243,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
 /* ── Store Notes specific ── */
 .status-pill{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:4px 11px;border-radius:8px;
-  font-size:11px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;border-radius:8px;
+  font-size:12px;font-weight:600;
   font-family:'Inter',sans-serif;letter-spacing:-0.01em;
   white-space:nowrap;
 }
@@ -1265,10 +1265,10 @@ select option{background:#1a1f2e;color:#e8ecf4}
   background:rgba(148,163,200,0.08);border:1px solid var(--border-strong);color:var(--text-2);
 }
 .photo-link-btn{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:6px 12px;border-radius:8px;
+  display:inline-flex;align-items:center;gap:6px;
+  padding:8px 14px;border-radius:9px;
   background:linear-gradient(135deg, var(--indigo), #4f46e5);
-  color:#fff;font-size:11.5px;font-weight:600;
+  color:#fff;font-size:12.5px;font-weight:600;
   text-decoration:none;
   border:none;cursor:pointer;
   transition:all .2s;letter-spacing:-0.01em;
@@ -1288,16 +1288,16 @@ select option{background:#1a1f2e;color:#e8ecf4}
 }
 .photo-link-btn.disabled:hover{transform:none}
 .notes-cell{
-  max-width:340px;white-space:normal;word-wrap:break-word;
-  color:var(--text-2);font-size:12.5px;line-height:1.45;font-weight:400;
+  max-width:none;white-space:normal;word-wrap:break-word;
+  color:var(--text-2);font-size:13.5px;line-height:1.5;font-weight:400;
 }
 .remarks-cell{
-  max-width:240px;white-space:normal;word-wrap:break-word;
-  color:var(--text-3);font-size:11.5px;line-height:1.4;font-style:italic;
+  max-width:none;white-space:normal;word-wrap:break-word;
+  color:var(--text-3);font-size:12.5px;line-height:1.45;font-style:italic;
 }
 .timestamp-cell{
   white-space:nowrap;font-family:'JetBrains Mono',monospace;
-  font-size:11.5px;color:var(--text-2);font-weight:500;
+  font-size:12.5px;color:var(--text-2);font-weight:500;line-height:1.5;
 }
 
 /* ── Mobile performance ── */
@@ -1323,7 +1323,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
   body::after{display:none !important}
 
   /* Smaller layout adjustments */
-  .main{padding:14px 12px 30px}
+  .main{padding:14px 10px 30px;max-width:100%}
   .header{padding:12px 16px}
   .controls{padding:12px 14px;gap:10px}
   .kpi-grid{grid-template-columns:repeat(2,1fr) !important;gap:10px}
@@ -1335,7 +1335,19 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   /* Table: allow horizontal scroll, compact padding */
   .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  td,th{padding:9px 10px;font-size:11.5px}
+  table{font-size:12.5px}
+  td,th{padding:10px 12px;font-size:12px}
+  .store-name{font-size:13px}
+  .store-id{font-size:10.5px}
+  .num{font-size:12px}
+  .area-tag{font-size:11.5px;padding:4px 9px}
+  .pill{font-size:11px;padding:4px 9px}
+  .status-pill{font-size:11px;padding:4px 9px}
+  .photo-link-btn{font-size:11.5px;padding:6px 11px}
+  .notes-cell{font-size:12.5px}
+  .remarks-cell{font-size:11.5px}
+  .timestamp-cell{font-size:11.5px}
+  .just-full{font-size:12px;max-width:220px}
 
   /* Reduce logo text */
   .logo-text{font-size:15px}
@@ -1352,9 +1364,6 @@ select option{background:#1a1f2e;color:#e8ecf4}
   .area-dot{box-shadow:none !important}
   .legend-dot{box-shadow:none !important}
   .kpi:hover{transform:none !important}
-
-  /* Detail report justification - constrain width on mobile */
-  .just-full{max-width:200px}
 }
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:rgba(15,20,35,0.4)}
@@ -2584,7 +2593,7 @@ function renderMissing(missing, hasDateFilter) {
           \${s.area || '—'}
         </span>
       </td>
-      <td><span style="font-size:12px;color:var(--text-2);font-weight:500">\${s.region || '—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-2);font-weight:500">\${s.region || '—'}</span></td>
       <td><span class="remark-pill \${remarkCls}">\${s.remarks || '—'}</span></td>
     </tr>\`;
   }).join('');
@@ -2832,13 +2841,13 @@ function renderMDetail(rows) {
 
     return \`<tr>
       <td><span class="num" style="color:var(--text-1);font-weight:600">\${dateStr}</span></td>
-      <td><span style="font-size:12px;color:var(--text-2);font-weight:500">\${r.day || '—'}</span></td>
-      <td><span style="font-size:12px;color:var(--text-3);font-weight:500">\${r.dayYA || '—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-2);font-weight:500">\${r.day || '—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-3);font-weight:500">\${r.dayYA || '—'}</span></td>
       <td>
         <div class="store-cell">
-          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:30px;height:30px;font-size:10.5px">\${initials(r.storeName)}</div>
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:34px;height:34px;font-size:12px">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name" style="font-size:12.5px">\${r.storeName || '—'}</div>
+            <div class="store-name" style="font-size:13.5px">\${r.storeName || '—'}</div>
             <div class="store-id">#\${r.storeId}</div>
           </div>
         </div>
@@ -3539,14 +3548,14 @@ function renderCDetail(rows) {
       <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${r.category || '—'}</span></td>
       <td>
         <div class="store-cell">
-          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:30px;height:30px;font-size:10.5px">\${initials(r.storeName)}</div>
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:34px;height:34px;font-size:12px">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name" style="font-size:12.5px">\${r.storeName || '—'}</div>
+            <div class="store-name" style="font-size:13.5px">\${r.storeName || '—'}</div>
             <div class="store-id">\${r.area || ''}</div>
           </div>
         </div>
       </td>
-      <td><span style="font-size:12.5px;color:var(--text-1);font-weight:500">\${r.subDepName || '—'}</span></td>
+      <td><span style="font-size:13.5px;color:var(--text-1);font-weight:500">\${r.subDepName || '—'}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(r.sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(r.salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctStr}</span></td>
@@ -4136,9 +4145,9 @@ function renderNotesTable(rows) {
       <td><span class="num num-bold" style="color:var(--text-1)">#\${r.storeId || '—'}</span></td>
       <td>
         <div class="store-cell">
-          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:32px;height:32px;font-size:11px">\${initials(r.storeName)}</div>
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:36px;height:36px;font-size:12.5px">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name" style="font-size:12.5px">\${r.storeName || '—'}</div>
+            <div class="store-name" style="font-size:13.5px">\${r.storeName || '—'}</div>
           </div>
         </div>
       </td>
@@ -4421,9 +4430,9 @@ function renderStoreStatusTable(rows) {
       <td>\${rankBadge}</td>
       <td>
         <div class="store-cell">
-          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:28px;height:28px;font-size:10px">\${initials(r.storeName)}</div>
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:32px;height:32px;font-size:11px">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name" style="font-size:12px">\${r.storeName || '—'}</div>
+            <div class="store-name" style="font-size:13px">\${r.storeName || '—'}</div>
             <div class="store-id">\${r.storeId ? '#'+r.storeId : ''}</div>
           </div>
         </div>

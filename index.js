@@ -2586,6 +2586,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
     <div class="table-card" style="margin:16px 0 24px">
       <div class="table-header">
         <div class="table-title"><i class="fa fa-triangle-exclamation"></i> High Priority Not Done Summary</div>
+        <button class="export-btn" onclick="exportHighPriorityNotDoneToExcel()">
+          <i class="fa fa-file-excel"></i> Export Excel
+        </button>
         <div class="table-date" id="iHighNotDoneInfo">—</div>
       </div>
       <div class="table-wrap" style="max-height:360px">
@@ -2639,6 +2642,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
     <div class="table-card" style="margin-top:24px">
       <div class="table-header">
         <div class="table-title"><i class="fa fa-list-ul"></i> Issues &amp; Concerns Detail</div>
+        <button class="export-btn" onclick="exportIssuesDetailToExcel()">
+          <i class="fa fa-file-excel"></i> Export Excel
+        </button>
         <div class="table-date" id="iTableInfo">—</div>
       </div>
       <div class="table-wrap" style="max-height:720px">
@@ -5326,9 +5332,7 @@ function renderHighPriorityNotDoneTable(rows) {
   const info = document.getElementById('iHighNotDoneInfo');
   if (!tbody) return;
 
-  const focused = rows
-    .filter(r => priorityKey(r.priority) === 'high' && !r.isResolved)
-    .sort((a, b) => (b.dateTs || 0) - (a.dateTs || 0) || (a.storeName || '').localeCompare(b.storeName || ''));
+  const focused = highPriorityNotDoneRows(rows);
 
   if (info) info.textContent = focused.length + ' issue' + (focused.length !== 1 ? 's' : '');
 
@@ -5353,6 +5357,93 @@ function renderHighPriorityNotDoneTable(rows) {
       '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '—') + '</span></td>' +
     '</tr>';
   }).join('');
+}
+
+function highPriorityNotDoneRows(rows) {
+  return rows
+    .filter(r => priorityKey(r.priority) === 'high' && !r.isResolved)
+    .sort((a, b) => (b.dateTs || 0) - (a.dateTs || 0) || (a.storeName || '').localeCompare(b.storeName || ''));
+}
+
+function issueExportDateTag() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return yyyy + '-' + mm + '-' + dd;
+}
+
+function writeIssueExcelFile(rows, sheetName, filename, columns) {
+  if (!rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = columns.map(wch => ({ wch }));
+
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      fill: { fgColor: { rgb: '166534' } },
+      font: { color: { rgb: 'FFFFFF' }, bold: true },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (ws[addr]) ws[addr].s = headerStyle;
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
+function exportHighPriorityNotDoneToExcel() {
+  const rows = highPriorityNotDoneRows(iState.rows).map(r => ({
+    'Store Name': r.storeName || '',
+    'Date': r.date || '',
+    'Issue Description': r.issueDescription || '',
+    'Impact': r.impactLevel || '',
+    'Status': r.status || '',
+    'Remarks': r.remarks || '',
+    'Last Update': r.lastUpdate || ''
+  }));
+  writeIssueExcelFile(
+    rows,
+    'High Priority Not Done',
+    'CaMaNaVa_High_Priority_Not_Done_' + issueExportDateTag() + '.xlsx',
+    [24, 14, 60, 14, 18, 40, 22]
+  );
+}
+
+function exportIssuesDetailToExcel() {
+  const rows = sortRows(iState.rows, iState.sort).map(r => ({
+    'Area': r.area || '',
+    'Store ID': r.storeId || '',
+    'Store Name': r.storeName || '',
+    'Date': r.date || '',
+    'Reported By': r.reportedBy || '',
+    'Issue Category': r.issueCategory || '',
+    'Sub Category': r.issueSubCategory || '',
+    'Issue Description': r.issueDescription || '',
+    'Priority': r.priority || '',
+    'Impact': r.impactLevel || '',
+    'Assign To': r.assignTo || '',
+    'Target Date': r.targetDate || '',
+    'Status': r.status || '',
+    'Resolution Details': r.resolutionDetails || '',
+    'Date Resolved': r.dateResolved || '',
+    'Days Open': r.daysOpen || 0,
+    'Remarks / Notes': r.remarks || '',
+    'Last Update': r.lastUpdate || ''
+  }));
+  writeIssueExcelFile(
+    rows,
+    'Issues Detail',
+    'CaMaNaVa_Issues_Detail_' + issueExportDateTag() + '.xlsx',
+    [16, 10, 24, 14, 18, 22, 22, 60, 14, 14, 18, 16, 18, 44, 16, 10, 40, 22]
+  );
 }
 
 function renderIssuesTable(rows) {

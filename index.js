@@ -1049,6 +1049,14 @@ select,input[type=date]{
 select{padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236366f1'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
 select.multi-select{min-width:150px;min-height:92px;padding-right:14px;background-image:none}
 select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
+.check-filter{
+  min-width:150px;max-height:116px;overflow:auto;
+  background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);
+  border-radius:10px;padding:7px 9px;display:grid;gap:5px;
+}
+.check-filter label{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-1);font-weight:500;white-space:nowrap;cursor:pointer}
+.check-filter input{accent-color:var(--indigo);width:13px;height:13px;flex:0 0 auto}
+.check-filter:hover{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
 select:hover,input[type=date]:hover{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
 select:focus,input[type=date]:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
 input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6) sepia(1) saturate(5) hue-rotate(210deg);cursor:pointer;opacity:0.8}
@@ -2515,16 +2523,12 @@ select option{background:#1a1f2e;color:#e8ecf4}
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-flag"></i> Priority</span>
-        <select id="iPriorityFilter" class="multi-select" multiple size="4" onchange="applyIssuesFilters()">
-          <option value="ALL" selected>All Priorities</option>
-        </select>
+        <div id="iPriorityFilter" class="check-filter"></div>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
-        <select id="iStatusFilter" class="multi-select" multiple size="4" onchange="applyIssuesFilters()">
-          <option value="ALL" selected>All Statuses</option>
-        </select>
+        <div id="iStatusFilter" class="check-filter"></div>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group" style="flex:1;min-width:160px">
@@ -2576,6 +2580,29 @@ select option{background:#1a1f2e;color:#e8ecf4}
         <div style="position:relative;height:300px">
           <canvas id="iStatusChart"></canvas>
         </div>
+      </div>
+    </div>
+
+    <div class="table-card" style="margin:16px 0 24px">
+      <div class="table-header">
+        <div class="table-title"><i class="fa fa-triangle-exclamation"></i> High Priority Not Done Summary</div>
+        <div class="table-date" id="iHighNotDoneInfo">—</div>
+      </div>
+      <div class="table-wrap" style="max-height:360px">
+        <table>
+          <thead>
+            <tr>
+              <th>Store Name</th>
+              <th>Date</th>
+              <th>Issue Description</th>
+              <th>Impact</th>
+              <th>Status</th>
+              <th>Remarks</th>
+              <th>Last Update</th>
+            </tr>
+          </thead>
+          <tbody id="iHighNotDoneBody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -5096,14 +5123,53 @@ function impactColor(i) {
   return IMPACT_COLORS[impactKey(i)] || IMPACT_COLORS.default;
 }
 
-function getMultiSelectValues(id) {
-  const sel = document.getElementById(id);
-  if (!sel) return [];
-  const selected = Array.from(sel.selectedOptions).map(o => o.value).filter(v => v && v !== 'ALL');
-  return selected.length ? selected : [];
+function renderCheckboxFilter(id, allLabel, values) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const name = id + 'Option';
+  wrap.innerHTML = '';
+
+  const all = document.createElement('label');
+  all.innerHTML = '<input type="checkbox" name="' + escHtml(name) + '" value="ALL" checked> ' + escHtml(allLabel);
+  wrap.appendChild(all);
+
+  values.forEach(value => {
+    const label = document.createElement('label');
+    label.innerHTML = '<input type="checkbox" name="' + escHtml(name) + '" value="' + escHtml(value) + '"> ' + escHtml(value);
+    wrap.appendChild(label);
+  });
+
+  wrap.querySelectorAll('input').forEach(input => {
+    input.addEventListener('change', e => onCheckboxFilterChange(id, e));
+  });
 }
 
-function addMultiSelectParams(params, name, values) {
+function onCheckboxFilterChange(id, e) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const all = wrap.querySelector('input[value="ALL"]');
+  const items = Array.from(wrap.querySelectorAll('input:not([value="ALL"])'));
+  const changed = e && e.target;
+
+  if (changed === all && all.checked) {
+    items.forEach(input => { input.checked = false; });
+  } else {
+    const anyChecked = items.some(input => input.checked);
+    if (all) all.checked = !anyChecked;
+  }
+
+  applyIssuesFilters();
+}
+
+function getCheckedFilterValues(id) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return [];
+  return Array.from(wrap.querySelectorAll('input:checked'))
+    .map(input => input.value)
+    .filter(value => value && value !== 'ALL');
+}
+
+function addMultiFilterParams(params, name, values) {
   values.forEach(v => params.append(name, v));
 }
 
@@ -5139,24 +5205,11 @@ async function initIssuesTab() {
 
     populateIStores(json.stores);
 
-    const pSel = document.getElementById('iPriorityFilter');
-    pSel.innerHTML = '<option value="ALL" selected>All Priorities</option>';
     // Sort priorities by severity (critical, high, medium, low, others)
     const priOrder = { critical: 1, high: 2, medium: 3, low: 4, default: 5 };
-    [...json.priorities].sort((a,b) => (priOrder[priorityKey(a)]||9) - (priOrder[priorityKey(b)]||9))
-      .forEach(p => {
-        const o = document.createElement('option');
-        o.value = o.textContent = p;
-        pSel.appendChild(o);
-      });
-
-    const stSel = document.getElementById('iStatusFilter');
-    stSel.innerHTML = '<option value="ALL" selected>All Statuses</option>';
-    json.statuses.forEach(s => {
-      const o = document.createElement('option');
-      o.value = o.textContent = s;
-      stSel.appendChild(o);
-    });
+    const priorities = [...json.priorities].sort((a,b) => (priOrder[priorityKey(a)]||9) - (priOrder[priorityKey(b)]||9));
+    renderCheckboxFilter('iPriorityFilter', 'All Priorities', priorities);
+    renderCheckboxFilter('iStatusFilter', 'All Statuses', json.statuses);
 
     iState.initialized = true;
     await applyIssuesFilters();
@@ -5201,15 +5254,15 @@ function debouncedIssuesSearch() {
 async function applyIssuesFilters() {
   const area     = document.getElementById('iAreaFilter').value;
   const store    = document.getElementById('iStoreFilter').value;
-  const priorities = getMultiSelectValues('iPriorityFilter');
-  const statuses   = getMultiSelectValues('iStatusFilter');
+  const priorities = getCheckedFilterValues('iPriorityFilter');
+  const statuses   = getCheckedFilterValues('iStatusFilter');
   const q        = document.getElementById('iSearch').value.trim();
 
   const params = new URLSearchParams();
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
-  addMultiSelectParams(params, 'priority', priorities);
-  addMultiSelectParams(params, 'status', statuses);
+  addMultiFilterParams(params, 'priority', priorities);
+  addMultiFilterParams(params, 'status', statuses);
   if (q) params.set('q', q);
 
   try {
@@ -5229,6 +5282,7 @@ async function applyIssuesFilters() {
     document.getElementById('iTableInfo').textContent = parts.length ? parts.join(' · ') : 'All data';
 
     renderIssuesKPIs(iState.rows);
+    renderHighPriorityNotDoneTable(iState.rows);
     renderIssuesTable(sortRows(iState.rows, iState.sort));
     updateSortHeaders('iTableBody', iState.sort);
     renderIssuesCharts(iState.rows);
@@ -5265,6 +5319,40 @@ function formatShortDate(ts) {
 
 function escHtml(s) {
   return (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderHighPriorityNotDoneTable(rows) {
+  const tbody = document.getElementById('iHighNotDoneBody');
+  const info = document.getElementById('iHighNotDoneInfo');
+  if (!tbody) return;
+
+  const focused = rows
+    .filter(r => priorityKey(r.priority) === 'high' && !r.isResolved)
+    .sort((a, b) => (b.dateTs || 0) - (a.dateTs || 0) || (a.storeName || '').localeCompare(b.storeName || ''));
+
+  if (info) info.textContent = focused.length + ' issue' + (focused.length !== 1 ? 's' : '');
+
+  if (!focused.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No high priority not done issues</p><small>Current filters have no matching records</small></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = focused.map(r => {
+    const iColor = impactColor(r.impactLevel);
+    const stCls = issueStatusClass(r.status);
+    return '<tr>' +
+      '<td><div class="store-cell"><div class="store-info">' +
+        '<div class="store-name" style="font-size:13.5px">' + (escHtml(r.storeName) || '—') + '</div>' +
+        '<div class="store-id">' + escHtml(r.storeId ? '#'+r.storeId : r.area || '') + '</div>' +
+      '</div></div></td>' +
+      '<td><span class="timestamp-cell">' + (escHtml(r.date) || '—') + '</span></td>' +
+      '<td><div class="notes-cell">' + (escHtml(r.issueDescription) || '—') + '</div></td>' +
+      '<td style="text-align:center"><span class="status-pill" style="background:' + iColor + '22;border:1px solid ' + iColor + '66;color:' + iColor + '">' + (escHtml(r.impactLevel) || '—') + '</span></td>' +
+      '<td style="text-align:center"><span class="status-pill ' + stCls + '">' + (escHtml(r.status) || '—') + '</span></td>' +
+      '<td><div class="remarks-cell">' + (escHtml(r.remarks) || '—') + '</div></td>' +
+      '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '—') + '</span></td>' +
+    '</tr>';
+  }).join('');
 }
 
 function renderIssuesTable(rows) {

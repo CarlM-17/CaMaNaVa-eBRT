@@ -12,6 +12,7 @@ const DATA_RANGE = `${SHEET_NAME}!A23:R`;
 const STORE_LIST_RANGE = 'ListOfStores!A:E';
 const CATEGORY_RANGE = 'CategorySales!A:I';
 const STORE_NOTES_RANGE = 'StoreNotes!A:M';
+const ISSUES_RANGE = 'StoreOpsIssuesAndConcerns!A5:R';
 
 function getAuthClient() {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
@@ -57,6 +58,7 @@ let storeListCache = null, storeListCacheTime = 0;
 let salesCache = null, salesCacheTime = 0;
 let categoryCache = null, categoryCacheTime = 0;
 let storeNotesCache = null, storeNotesCacheTime = 0;
+let issuesCache = null, issuesCacheTime = 0;
 const CACHE_TTL = 5 * 60 * 1000;
 
 async function getMasterStoreList(sheets) {
@@ -217,6 +219,111 @@ async function getStoreNotesData(sheets) {
   storeNotesCache = data;
   storeNotesCacheTime = now;
   return storeNotesCache;
+}
+
+function parseDateFlexible(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  if (!t) return null;
+  // Try standard parse first
+  let d = new Date(t);
+  if (!isNaN(d.getTime())) return d;
+  // Try M/D/YYYY format
+  const parts = t.split('/');
+  if (parts.length === 3) {
+    const m = parseInt(parts[0], 10);
+    const day = parseInt(parts[1], 10);
+    const y = parseInt(parts[2], 10);
+    if (!isNaN(m) && !isNaN(day) && !isNaN(y)) {
+      d = new Date(y, m - 1, day);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+async function getIssuesData(sheets) {
+  const now = Date.now();
+  if (issuesCache && (now - issuesCacheTime) < CACHE_TTL) return issuesCache;
+  const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: ISSUES_RANGE });
+  const rows = response.data.values || [];
+  const data = [];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  // Row 0 in the response = sheet row 5 (header). Skip it.
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    // Columns A..R: Area, Store ID, Store Name, Date, Reported By, Issue Category,
+    // Issue Sub Category, Issue Description, Priority, Impact Level, Assign To,
+    // Target Resolution Date, Status, Resolution Details, Date Resolved,
+    // Days Open, Remarks/Notes, Last Update
+    const area              = (r[0] || '').trim();
+    const storeId           = (r[1] || '').trim();
+    const storeName         = (r[2] || '').trim();
+    const dateRaw           = (r[3] || '').trim();
+    const reportedBy        = (r[4] || '').trim();
+    const issueCategory     = (r[5] || '').trim();
+    const issueSubCategory  = (r[6] || '').trim();
+    const issueDescription  = (r[7] || '').trim();
+    const priority          = (r[8] || '').trim();
+    const impactLevel       = (r[9] || '').trim();
+    const assignTo          = (r[10] || '').trim();
+    const targetDateRaw     = (r[11] || '').trim();
+    const status            = (r[12] || '').trim();
+    const resolutionDetails = (r[13] || '').trim();
+    const dateResolvedRaw   = (r[14] || '').trim();
+    const daysOpenRaw       = (r[15] || '').trim();
+    const remarks           = (r[16] || '').trim();
+    const lastUpdate        = (r[17] || '').trim();
+
+    // skip blank rows
+    if (!area && !storeId && !storeName && !issueCategory && !issueDescription) continue;
+
+    const dateObj          = parseDateFlexible(dateRaw);
+    const targetDateObj    = parseDateFlexible(targetDateRaw);
+    const dateResolvedObj  = parseDateFlexible(dateResolvedRaw);
+
+    // Compute days open server-side if not present in sheet
+    let daysOpen = parseInt(daysOpenRaw, 10);
+    if (isNaN(daysOpen)) {
+      const start = dateObj;
+      const end = dateResolvedObj || today;
+      if (start) {
+        const ms = end.getTime() - start.getTime();
+        daysOpen = Math.max(0, Math.floor(ms / 86400000));
+      } else {
+        daysOpen = 0;
+      }
+    }
+
+    // Overdue if not resolved and target date has passed
+    const sLower = status.toLowerCase();
+    const isResolved = /resolv|closed|done|complete/.test(sLower);
+    const overdue = !isResolved && targetDateObj && targetDateObj < today;
+
+    data.push({
+      area, storeId, storeName,
+      date: dateRaw,
+      dateTs: dateObj ? dateObj.getTime() : 0,
+      reportedBy,
+      issueCategory, issueSubCategory, issueDescription,
+      priority, impactLevel, assignTo,
+      targetDate: targetDateRaw,
+      targetDateTs: targetDateObj ? targetDateObj.getTime() : 0,
+      status,
+      resolutionDetails,
+      dateResolved: dateResolvedRaw,
+      dateResolvedTs: dateResolvedObj ? dateResolvedObj.getTime() : 0,
+      daysOpen,
+      remarks,
+      lastUpdate,
+      isResolved,
+      overdue,
+    });
+  }
+  issuesCache = data;
+  issuesCacheTime = now;
+  return issuesCache;
 }
 
 // ─── API: GET /api/sales ─────────────────────────────────────────────────────
@@ -657,6 +764,74 @@ app.get('/api/store-notes-filters', async (req, res) => {
     });
   } catch (err) {
     console.error('Store-notes-filters error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── API: GET /api/issues-filters ───────────────────────────────────────────
+app.get('/api/issues-filters', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const data = await getIssuesData(sheets);
+    const { area: filterArea } = req.query;
+    const areas = new Set();
+    const stores = new Set();
+    const priorities = new Set();
+    const statuses = new Set();
+    const categories = new Set();
+    data.forEach(r => {
+      if (r.area) areas.add(r.area);
+      if (r.priority) priorities.add(r.priority);
+      if (r.status) statuses.add(r.status);
+      if (r.issueCategory) categories.add(r.issueCategory);
+      if (r.storeName) {
+        if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
+      }
+    });
+    res.json({
+      success: true,
+      areas: [...areas].sort(),
+      stores: [...stores].sort(),
+      priorities: [...priorities].sort(),
+      statuses: [...statuses].sort(),
+      categories: [...categories].sort(),
+    });
+  } catch (err) {
+    console.error('Issues-filters error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── API: GET /api/issues ───────────────────────────────────────────────────
+app.get('/api/issues', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const data = await getIssuesData(sheets);
+    const { area, store, priority, status, category, q } = req.query;
+    let filtered = data;
+    if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
+    if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
+    if (priority && priority !== 'ALL') filtered = filtered.filter(r => r.priority === priority);
+    if (status && status !== 'ALL') filtered = filtered.filter(r => r.status === status);
+    if (category && category !== 'ALL') filtered = filtered.filter(r => r.issueCategory === category);
+    if (q) {
+      const needle = q.toLowerCase();
+      filtered = filtered.filter(r =>
+        (r.issueDescription || '').toLowerCase().includes(needle) ||
+        (r.storeName || '').toLowerCase().includes(needle) ||
+        (r.issueCategory || '').toLowerCase().includes(needle) ||
+        (r.issueSubCategory || '').toLowerCase().includes(needle) ||
+        (r.assignTo || '').toLowerCase().includes(needle) ||
+        (r.remarks || '').toLowerCase().includes(needle)
+      );
+    }
+    // Sort by Date descending (newest first)
+    filtered.sort((a, b) => (b.dateTs || 0) - (a.dateTs || 0));
+    res.json({ success: true, count: filtered.length, rows: filtered });
+  } catch (err) {
+    console.error('Issues error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1559,6 +1734,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
     <button class="tab-btn" data-tab="notes" onclick="switchTab('notes')">
       <i class="fa fa-note-sticky"></i> Store Notes
     </button>
+    <button class="tab-btn" data-tab="issues" onclick="switchTab('issues')">
+      <i class="fa fa-triangle-exclamation"></i> Store Issues &amp; Concerns
+    </button>
   </div>
 
   <!-- ═══════════════════ DAILY TAB ═══════════════════ -->
@@ -2284,6 +2462,159 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-notes -->
 
+  <!-- ═══════════════════ ISSUES & CONCERNS TAB ═══════════════════ -->
+  <div class="tab-content" id="tab-issues">
+
+    <!-- Controls -->
+    <div class="controls">
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-layer-group"></i> Area</span>
+        <select id="iAreaFilter" onchange="onIAreaChange()">
+          <option value="ALL">All Areas</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-store"></i> Store</span>
+        <select id="iStoreFilter" onchange="applyIssuesFilters()">
+          <option value="ALL">All Stores</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-flag"></i> Priority</span>
+        <select id="iPriorityFilter" onchange="applyIssuesFilters()">
+          <option value="ALL">All Priorities</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
+        <select id="iStatusFilter" onchange="applyIssuesFilters()">
+          <option value="ALL">All Statuses</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group" style="flex:1;min-width:160px">
+        <span class="ctrl-label"><i class="fa fa-magnifying-glass"></i> Search</span>
+        <input type="text" id="iSearch" placeholder="Search description, store, assignee..." oninput="debouncedIssuesSearch()" style="background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);color:var(--text-1);padding:9px 14px;border-radius:10px;font-size:13px;font-family:'Inter',sans-serif;font-weight:500;outline:none;flex:1;min-width:160px"/>
+      </div>
+      <div class="records-count" id="iRecordsCount">—</div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid">
+      <div class="kpi k-sales">
+        <div class="kpi-label"><div class="kpi-icon"><i class="fa fa-list-check"></i></div>Total Issues</div>
+        <div class="kpi-value gradient-text" id="i-kpi-total">—</div>
+        <div class="kpi-sub">In current view</div>
+      </div>
+      <div class="kpi" style="--accent-color:#f43f5e">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f43f5e,#fb7185)"><i class="fa fa-circle-exclamation"></i></div>Open</div>
+        <div class="kpi-value" id="i-kpi-open" style="color:#fb7185">—</div>
+        <div class="kpi-sub" id="i-kpi-open-sub">—</div>
+      </div>
+      <div class="kpi" style="--accent-color:#10b981">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#10b981,#34d399)"><i class="fa fa-circle-check"></i></div>Resolved</div>
+        <div class="kpi-value" id="i-kpi-resolved" style="color:#34d399">—</div>
+        <div class="kpi-sub" id="i-kpi-resolved-sub">—</div>
+      </div>
+      <div class="kpi" style="--accent-color:#f59e0b">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><i class="fa fa-clock"></i></div>Overdue</div>
+        <div class="kpi-value" id="i-kpi-overdue" style="color:#fbbf24">—</div>
+        <div class="kpi-sub" id="i-kpi-overdue-sub">Past target date</div>
+      </div>
+      <div class="kpi" style="--accent-color:#6366f1">
+        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#6366f1,#818cf8)"><i class="fa fa-stopwatch"></i></div>Avg Days Open</div>
+        <div class="kpi-value gradient-text" id="i-kpi-avg-days">—</div>
+        <div class="kpi-sub">Across all open issues</div>
+      </div>
+    </div>
+
+    <!-- Charts Row 1 -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fa fa-chart-pie"></i> Issues by Priority</div>
+        <div style="position:relative;height:300px">
+          <canvas id="iPriorityChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title"><i class="fa fa-chart-pie"></i> Issues by Status</div>
+        <div style="position:relative;height:300px">
+          <canvas id="iStatusChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts Row 2 -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fa fa-tags"></i> Issues by Category</div>
+        <div style="position:relative;height:340px">
+          <canvas id="iCategoryChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title"><i class="fa fa-layer-group"></i> Issues by Area</div>
+        <div style="position:relative;height:340px">
+          <canvas id="iAreaChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Affected Stores -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-title">
+        <i class="fa fa-ranking-star"></i> Top Affected Stores
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">By open issues</span>
+      </div>
+      <div style="overflow-y:auto;max-height:520px;padding-right:4px">
+        <div id="iStoreChartWrap" style="position:relative;height:400px">
+          <canvas id="iStoreChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Issues Table -->
+    <div class="table-card" style="margin-top:24px">
+      <div class="table-header">
+        <div class="table-title"><i class="fa fa-list-ul"></i> Issues &amp; Concerns Detail</div>
+        <div class="table-date" id="iTableInfo">—</div>
+      </div>
+      <div class="table-wrap" style="max-height:720px">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortIssues('area','string')">Area <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeId" data-sort-type="string" onclick="sortIssues('storeId','string')">Store ID <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortIssues('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="dateTs" data-sort-type="num" onclick="sortIssues('dateTs','num')">Date <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="reportedBy" data-sort-type="string" onclick="sortIssues('reportedBy','string')">Reported By <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="issueCategory" data-sort-type="string" onclick="sortIssues('issueCategory','string')">Issue Category <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="issueSubCategory" data-sort-type="string" onclick="sortIssues('issueSubCategory','string')">Sub Category <span class="sort-icon">⇅</span></th>
+              <th>Issue Description</th>
+              <th class="sortable" data-sort-key="priority" data-sort-type="string" onclick="sortIssues('priority','string')" style="text-align:center">Priority <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="impactLevel" data-sort-type="string" onclick="sortIssues('impactLevel','string')" style="text-align:center">Impact <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="assignTo" data-sort-type="string" onclick="sortIssues('assignTo','string')">Assign To <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="targetDateTs" data-sort-type="num" onclick="sortIssues('targetDateTs','num')">Target Date <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortIssues('status','string')" style="text-align:center">Status <span class="sort-icon">⇅</span></th>
+              <th>Resolution Details</th>
+              <th class="sortable" data-sort-key="dateResolvedTs" data-sort-type="num" onclick="sortIssues('dateResolvedTs','num')">Date Resolved <span class="sort-icon">⇅</span></th>
+              <th class="sortable" data-sort-key="daysOpen" data-sort-type="num" onclick="sortIssues('daysOpen','num')" style="text-align:center">Days Open <span class="sort-icon">⇅</span></th>
+              <th>Remarks / Notes</th>
+              <th>Last Update</th>
+            </tr>
+          </thead>
+          <tbody id="iTableBody">
+            <tr><td colspan="18" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-issues -->
+
 </main>
 
 <script>
@@ -2369,6 +2700,9 @@ function switchTab(tab) {
   }
   if (tab === 'notes' && !nState.initialized) {
     initNotesTab();
+  }
+  if (tab === 'issues' && !iState.initialized) {
+    initIssuesTab();
   }
 }
 
@@ -4679,6 +5013,412 @@ function sortNotes(key, type) {
   nState.sort.type = type;
   renderNotesTable(sortRows(nState.rows, nState.sort));
   updateSortHeaders('nTableBody', nState.sort);
+}
+
+// ═══════════════════════ ISSUES & CONCERNS TAB ════════════════════════════
+const iState = {
+  initialized: false,
+  rows: [],
+  filters: { areas: [], stores: [], priorities: [], statuses: [], categories: [] },
+  sort: { key: 'dateTs', dir: 'desc', type: 'num' },
+  priorityChart: null,
+  statusChart: null,
+  categoryChart: null,
+  areaChart: null,
+  storeChart: null,
+};
+
+const PRIORITY_COLORS = {
+  critical: '#dc2626', high: '#f43f5e', medium: '#f59e0b', low: '#10b981',
+  default: '#94a3b8',
+};
+const IMPACT_COLORS = {
+  high: '#f43f5e', medium: '#f59e0b', low: '#10b981',
+  default: '#94a3b8',
+};
+
+function priorityKey(p) {
+  const s = (p || '').toLowerCase().trim();
+  if (!s) return 'default';
+  if (s.includes('critic')) return 'critical';
+  if (s.includes('high') || s === '1' || s === 'p1') return 'high';
+  if (s.includes('med') || s === '2' || s === 'p2') return 'medium';
+  if (s.includes('low') || s === '3' || s === 'p3') return 'low';
+  return 'default';
+}
+
+function priorityColor(p) {
+  return PRIORITY_COLORS[priorityKey(p)] || PRIORITY_COLORS.default;
+}
+
+function impactKey(i) {
+  const s = (i || '').toLowerCase().trim();
+  if (!s) return 'default';
+  if (s.includes('high')) return 'high';
+  if (s.includes('med')) return 'medium';
+  if (s.includes('low')) return 'low';
+  return 'default';
+}
+
+function impactColor(i) {
+  return IMPACT_COLORS[impactKey(i)] || IMPACT_COLORS.default;
+}
+
+function issueStatusClass(s) {
+  const t = (s || '').toLowerCase().trim();
+  if (!t) return 'default';
+  if (/resolv|closed|done|complete/.test(t)) return 'done';
+  if (/pending|open|new/.test(t)) return 'pending';
+  if (/progress|ongoing|review/.test(t)) return 'review';
+  if (/cancel|reject|urgent|critical/.test(t)) return 'urgent';
+  return 'default';
+}
+
+async function initIssuesTab() {
+  try {
+    const res = await fetch('/api/issues-filters');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+    iState.filters = json;
+
+    const aSel = document.getElementById('iAreaFilter');
+    aSel.innerHTML = '<option value="ALL">All Areas</option>';
+    json.areas.forEach(a => {
+      const o = document.createElement('option');
+      o.value = o.textContent = a;
+      aSel.appendChild(o);
+    });
+
+    populateIStores(json.stores);
+
+    const pSel = document.getElementById('iPriorityFilter');
+    pSel.innerHTML = '<option value="ALL">All Priorities</option>';
+    // Sort priorities by severity (critical, high, medium, low, others)
+    const priOrder = { critical: 1, high: 2, medium: 3, low: 4, default: 5 };
+    [...json.priorities].sort((a,b) => (priOrder[priorityKey(a)]||9) - (priOrder[priorityKey(b)]||9))
+      .forEach(p => {
+        const o = document.createElement('option');
+        o.value = o.textContent = p;
+        pSel.appendChild(o);
+      });
+
+    const stSel = document.getElementById('iStatusFilter');
+    stSel.innerHTML = '<option value="ALL">All Statuses</option>';
+    json.statuses.forEach(s => {
+      const o = document.createElement('option');
+      o.value = o.textContent = s;
+      stSel.appendChild(o);
+    });
+
+    iState.initialized = true;
+    await applyIssuesFilters();
+  } catch(e) {
+    console.error('Issues init error:', e);
+    document.getElementById('iTableBody').innerHTML =
+      \`<tr><td colspan="18" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function populateIStores(stores) {
+  const sel = document.getElementById('iStoreFilter');
+  sel.innerHTML = '<option value="ALL">All Stores</option>';
+  stores.forEach(s => {
+    const o = document.createElement('option');
+    o.value = o.textContent = s;
+    sel.appendChild(o);
+  });
+}
+
+async function onIAreaChange() {
+  const area = document.getElementById('iAreaFilter').value;
+  if (area === 'ALL') {
+    populateIStores(iState.filters.stores);
+  } else {
+    try {
+      const res = await fetch('/api/issues-filters?area=' + encodeURIComponent(area));
+      const json = await res.json();
+      if (json.success) populateIStores(json.stores);
+    } catch(e) {}
+  }
+  document.getElementById('iStoreFilter').value = 'ALL';
+  await applyIssuesFilters();
+}
+
+let _issuesSearchTimer = null;
+function debouncedIssuesSearch() {
+  clearTimeout(_issuesSearchTimer);
+  _issuesSearchTimer = setTimeout(applyIssuesFilters, 300);
+}
+
+async function applyIssuesFilters() {
+  const area     = document.getElementById('iAreaFilter').value;
+  const store    = document.getElementById('iStoreFilter').value;
+  const priority = document.getElementById('iPriorityFilter').value;
+  const status   = document.getElementById('iStatusFilter').value;
+  const q        = document.getElementById('iSearch').value.trim();
+
+  const params = new URLSearchParams();
+  if (area !== 'ALL') params.set('area', area);
+  if (store !== 'ALL') params.set('store', store);
+  if (priority !== 'ALL') params.set('priority', priority);
+  if (status !== 'ALL') params.set('status', status);
+  if (q) params.set('q', q);
+
+  try {
+    const res = await fetch('/api/issues?' + params);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+    iState.rows = json.rows || [];
+    document.getElementById('iRecordsCount').innerHTML = \`<span>\${iState.rows.length}</span> issue\${iState.rows.length!==1?'s':''}\`;
+
+    const parts = [];
+    if (area !== 'ALL') parts.push(area);
+    if (store !== 'ALL') parts.push(store);
+    if (priority !== 'ALL') parts.push(priority);
+    if (status !== 'ALL') parts.push(status);
+    document.getElementById('iTableInfo').textContent = parts.length ? parts.join(' · ') : 'All data';
+
+    renderIssuesKPIs(iState.rows);
+    renderIssuesTable(sortRows(iState.rows, iState.sort));
+    updateSortHeaders('iTableBody', iState.sort);
+    renderIssuesCharts(iState.rows);
+  } catch(e) {
+    console.error(e);
+    document.getElementById('iTableBody').innerHTML =
+      \`<tr><td colspan="18" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function renderIssuesKPIs(rows) {
+  const total = rows.length;
+  const resolved = rows.filter(r => r.isResolved).length;
+  const open = total - resolved;
+  const overdue = rows.filter(r => r.overdue).length;
+  const openRows = rows.filter(r => !r.isResolved);
+  const avgDaysOpen = openRows.length ? openRows.reduce((s,r)=>s+(r.daysOpen||0),0) / openRows.length : 0;
+
+  document.getElementById('i-kpi-total').textContent    = total;
+  document.getElementById('i-kpi-open').textContent     = open;
+  document.getElementById('i-kpi-open-sub').textContent = total ? ((open/total*100).toFixed(1) + '% of total') : '0% of total';
+  document.getElementById('i-kpi-resolved').textContent = resolved;
+  document.getElementById('i-kpi-resolved-sub').textContent = total ? ((resolved/total*100).toFixed(1) + '% resolution rate') : '0% resolution rate';
+  document.getElementById('i-kpi-overdue').textContent  = overdue;
+  document.getElementById('i-kpi-avg-days').textContent = avgDaysOpen.toFixed(1);
+}
+
+function formatShortDate(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function escHtml(s) {
+  return (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderIssuesTable(rows) {
+  const tbody = document.getElementById('iTableBody');
+  if (!rows.length) {
+    tbody.innerHTML = \`<tr><td colspan="18" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No issues found</p><small>Try adjusting your filters</small></td></tr>\`;
+    return;
+  }
+
+  const html = rows.map(r => {
+    const areaColor = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const pColor = priorityColor(r.priority);
+    const iColor = impactColor(r.impactLevel);
+    const stCls = issueStatusClass(r.status);
+
+    const overdueBadge = r.overdue ? ' <span style="color:#fb7185;font-weight:700" title="Overdue"><i class="fa fa-triangle-exclamation"></i></span>' : '';
+
+    return \`<tr>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${areaColor};color:\${areaColor}"></span>\${escHtml(r.area)||'—'}</span></td>
+      <td><span class="num num-bold" style="color:var(--text-1)">\${escHtml(r.storeId)||'—'}</span></td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:34px;height:34px;font-size:12px">\${initials(r.storeName)}</div>
+          <div class="store-info"><div class="store-name" style="font-size:13.5px">\${escHtml(r.storeName)||'—'}</div></div>
+        </div>
+      </td>
+      <td><span class="timestamp-cell">\${escHtml(r.date)||'—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-2)">\${escHtml(r.reportedBy)||'—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-1);font-weight:500">\${escHtml(r.issueCategory)||'—'}</span></td>
+      <td><span style="font-size:12.5px;color:var(--text-2)">\${escHtml(r.issueSubCategory)||'—'}</span></td>
+      <td><div class="notes-cell">\${escHtml(r.issueDescription)||'—'}</div></td>
+      <td style="text-align:center"><span class="status-pill" style="background:\${pColor}22;border:1px solid \${pColor}66;color:\${pColor}"><i class="fa fa-flag"></i> \${escHtml(r.priority)||'—'}</span></td>
+      <td style="text-align:center"><span class="status-pill" style="background:\${iColor}22;border:1px solid \${iColor}66;color:\${iColor}">\${escHtml(r.impactLevel)||'—'}</span></td>
+      <td><span style="font-size:13px;color:var(--text-2)">\${escHtml(r.assignTo)||'—'}</span></td>
+      <td><span class="timestamp-cell" style="\${r.overdue?'color:#fb7185;font-weight:600':''}">\${escHtml(r.targetDate)||'—'}\${overdueBadge}</span></td>
+      <td style="text-align:center"><span class="status-pill \${stCls}">\${escHtml(r.status)||'—'}</span></td>
+      <td><div class="notes-cell">\${escHtml(r.resolutionDetails)||'—'}</div></td>
+      <td><span class="timestamp-cell">\${escHtml(r.dateResolved)||'—'}</span></td>
+      <td style="text-align:center"><span class="num num-bold" style="color:\${r.daysOpen>14?'#fb7185':r.daysOpen>7?'#fbbf24':'var(--text-1)'}">\${r.daysOpen}</span></td>
+      <td><div class="remarks-cell">\${escHtml(r.remarks)||'—'}</div></td>
+      <td><span class="timestamp-cell">\${escHtml(r.lastUpdate)||'—'}</span></td>
+    </tr>\`;
+  }).join('');
+
+  tbody.innerHTML = html;
+}
+
+function sortIssues(key, type) {
+  if (iState.sort.key === key) iState.sort.dir = iState.sort.dir === 'asc' ? 'desc' : 'asc';
+  else iState.sort = { key, dir: 'desc', type };
+  iState.sort.type = type;
+  renderIssuesTable(sortRows(iState.rows, iState.sort));
+  updateSortHeaders('iTableBody', iState.sort);
+}
+
+// ─── Issues Charts ─────────────────────────────────────────────────────────
+function renderIssuesCharts(rows) {
+  // Priority doughnut
+  const priorityMap = {};
+  rows.forEach(r => {
+    const k = r.priority || 'No Priority';
+    priorityMap[k] = (priorityMap[k] || 0) + 1;
+  });
+  const priorityLabels = Object.keys(priorityMap);
+  const priOrder = { critical: 1, high: 2, medium: 3, low: 4, default: 5 };
+  priorityLabels.sort((a,b) => (priOrder[priorityKey(a)]||9) - (priOrder[priorityKey(b)]||9));
+  const priorityValues = priorityLabels.map(k => priorityMap[k]);
+  const priorityCols = priorityLabels.map(k => priorityColor(k));
+
+  if (iState.priorityChart) iState.priorityChart.destroy();
+  iState.priorityChart = makeDoughnut('iPriorityChart', priorityLabels, priorityValues, priorityCols);
+
+  // Status doughnut
+  const statusMap = {};
+  rows.forEach(r => {
+    const k = r.status || 'No Status';
+    statusMap[k] = (statusMap[k] || 0) + 1;
+  });
+  const statusLabels = Object.keys(statusMap);
+  const statusValues = statusLabels.map(k => statusMap[k]);
+  const statusCols = statusLabels.map(k => {
+    const t = k.toLowerCase();
+    if (/resolv|closed|done|complete/.test(t)) return '#10b981';
+    if (/progress|ongoing|review/.test(t)) return '#6366f1';
+    if (/pending|open|new/.test(t)) return '#f59e0b';
+    if (/cancel|reject/.test(t)) return '#f43f5e';
+    return '#94a3b8';
+  });
+  if (iState.statusChart) iState.statusChart.destroy();
+  iState.statusChart = makeDoughnut('iStatusChart', statusLabels, statusValues, statusCols);
+
+  // Category horizontal bar (sorted by count desc)
+  const catMap = {};
+  rows.forEach(r => {
+    const k = r.issueCategory || 'No Category';
+    catMap[k] = (catMap[k] || 0) + 1;
+  });
+  const catEntries = Object.entries(catMap).sort((a,b) => b[1] - a[1]).slice(0, IS_MOBILE ? 8 : 14);
+  if (iState.categoryChart) iState.categoryChart.destroy();
+  iState.categoryChart = makeHBar('iCategoryChart', catEntries.map(e=>e[0]), catEntries.map(e=>e[1]), '#a855f7');
+
+  // Area horizontal bar
+  const areaMap = {};
+  rows.forEach(r => {
+    const k = r.area || 'No Area';
+    areaMap[k] = (areaMap[k] || 0) + 1;
+  });
+  const areaEntries = Object.entries(areaMap).sort((a,b) => b[1] - a[1]);
+  const areaCols = areaEntries.map(e => AREA_COLORS[e[0]] || DEFAULT_COLOR);
+  if (iState.areaChart) iState.areaChart.destroy();
+  iState.areaChart = makeHBar('iAreaChart', areaEntries.map(e=>e[0]), areaEntries.map(e=>e[1]), areaCols);
+
+  // Top affected stores (by OPEN issues)
+  const storeMap = {};
+  rows.forEach(r => {
+    if (r.isResolved) return; // count only open
+    const k = r.storeName || 'No Store';
+    if (!storeMap[k]) storeMap[k] = { name: k, area: r.area, count: 0 };
+    storeMap[k].count++;
+  });
+  const storeEntries = Object.values(storeMap).sort((a,b) => b.count - a.count);
+  const wrap = document.getElementById('iStoreChartWrap');
+  const dynHeight = Math.max(320, storeEntries.length * 28 + 40);
+  if (wrap) wrap.style.height = dynHeight + 'px';
+  const storeCols = storeEntries.map(s => AREA_COLORS[s.area] || DEFAULT_COLOR);
+  if (iState.storeChart) iState.storeChart.destroy();
+  iState.storeChart = makeHBar('iStoreChart', storeEntries.map(s => s.name), storeEntries.map(s => s.count), storeCols);
+}
+
+function makeDoughnut(canvasId, labels, data, colors) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return null;
+  return new Chart(canvas, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: 'rgba(10,14,26,0.8)', borderWidth: 3, hoverOffset: 10 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '58%',
+      layout: { padding: 16 },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, padding: 12, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded',
+          generateLabels: chart => chart.data.labels.map((label, i) => ({
+            text: label + '  (' + chart.data.datasets[0].data[i] + ')',
+            fillStyle: colors[i], strokeStyle: 'transparent', lineWidth: 0, pointStyle: 'rectRounded',
+          })),
+        } },
+        datalabels: {
+          display: ctx => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            return total && (ctx.dataset.data[ctx.dataIndex]/total*100) >= 4;
+          },
+          color: '#fff', font: { family: "'Inter'", size: 12, weight: '700' },
+          textStrokeColor: 'rgba(0,0,0,0.55)', textStrokeWidth: 3,
+          formatter: (val, ctx) => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            return total ? (val/total*100).toFixed(1) + '%' : '0%';
+          },
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1, padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", weight: '600', size: 13 }, bodyFont: { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: { label: ctx => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const pct = total ? (ctx.raw/total*100).toFixed(1) : 0;
+            return ' ' + ctx.raw + ' issues  (' + pct + '%)';
+          } }
+        }
+      }
+    }
+  });
+}
+
+function makeHBar(canvasId, labels, data, colors) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return null;
+  const bg = Array.isArray(colors) ? colors : labels.map(_ => colors);
+  return new Chart(canvas, {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Issues', data, backgroundColor: bg, borderRadius: 5, borderSkipped: false, barPercentage: 0.78 }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 40 } },
+      plugins: {
+        legend: { display: false },
+        datalabels: {
+          display: true, anchor: 'end', align: 'end',
+          color: '#e8ecf4', font: { family: "'JetBrains Mono'", size: 11, weight: '700' },
+          padding: { left: 6 },
+          formatter: v => v,
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(99,102,241,0.4)', borderWidth: 1, padding: 12, cornerRadius: 10,
+          titleFont: { family: "'Space Grotesk'", size: 13, weight: '600' }, bodyFont: { family: "'JetBrains Mono'", size: 11.5 },
+          titleColor: '#f0f3fb', bodyColor: '#a8b3d1',
+          callbacks: { label: ctx => ' ' + ctx.raw + ' issue' + (ctx.raw !== 1 ? 's' : '') }
+        }
+      },
+      scales: {
+        x: { grid: { color: 'rgba(148,163,200,0.06)' }, ticks: { color: '#a8b3d1', font: { size: 10.5, family: "'JetBrains Mono'", weight: '500' }, precision: 0 } },
+        y: { grid: { color: 'rgba(148,163,200,0.04)', drawBorder: false }, ticks: { color: '#a8b3d1', font: { size: 11, family: "'Inter'", weight: '500' }, autoSkip: false } }
+      }
+    }
+  });
 }
 
 function setStatus(type, text) {

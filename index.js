@@ -242,6 +242,34 @@ function parseDateFlexible(s) {
   return null;
 }
 
+function normalizeFilterText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function addCanonicalFilterValue(map, value) {
+  const label = String(value || '').trim().replace(/\s+/g, ' ');
+  const key = normalizeFilterText(label);
+  if (key && !map.has(key)) map.set(key, label);
+}
+
+function parseMultiFilterParam(value) {
+  const rawValues = Array.isArray(value) ? value : [value];
+  return new Set(rawValues
+    .filter(v => v != null)
+    .flatMap(v => String(v).split(','))
+    .map(normalizeFilterText)
+    .filter(v => v && v !== 'all'));
+}
+
+function prioritySortRank(value) {
+  const s = normalizeFilterText(value);
+  if (s.includes('critic')) return 1;
+  if (s.includes('high') || s === '1' || s === 'p1') return 2;
+  if (s.includes('med') || s === '2' || s === 'p2') return 3;
+  if (s.includes('low') || s === '3' || s === 'p3') return 4;
+  return 5;
+}
+
 async function getIssuesData(sheets) {
   const now = Date.now();
   if (issuesCache && (now - issuesCacheTime) < CACHE_TTL) return issuesCache;
@@ -777,13 +805,13 @@ app.get('/api/issues-filters', async (req, res) => {
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
-    const priorities = new Set();
-    const statuses = new Set();
+    const priorities = new Map();
+    const statuses = new Map();
     const categories = new Set();
     data.forEach(r => {
       if (r.area) areas.add(r.area);
-      if (r.priority) priorities.add(r.priority);
-      if (r.status) statuses.add(r.status);
+      addCanonicalFilterValue(priorities, r.priority);
+      addCanonicalFilterValue(statuses, r.status);
       if (r.issueCategory) categories.add(r.issueCategory);
       if (r.storeName) {
         if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
@@ -793,8 +821,8 @@ app.get('/api/issues-filters', async (req, res) => {
       success: true,
       areas: [...areas].sort(),
       stores: [...stores].sort(),
-      priorities: [...priorities].sort(),
-      statuses: [...statuses].sort(),
+      priorities: [...priorities.values()].sort((a, b) => prioritySortRank(a) - prioritySortRank(b) || a.localeCompare(b)),
+      statuses: [...statuses.values()].sort((a, b) => normalizeFilterText(a).localeCompare(normalizeFilterText(b))),
       categories: [...categories].sort(),
     });
   } catch (err) {
@@ -813,8 +841,10 @@ app.get('/api/issues', async (req, res) => {
     let filtered = data;
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
-    if (priority && priority !== 'ALL') filtered = filtered.filter(r => r.priority === priority);
-    if (status && status !== 'ALL') filtered = filtered.filter(r => r.status === status);
+    const prioritySet = parseMultiFilterParam(priority);
+    const statusSet = parseMultiFilterParam(status);
+    if (prioritySet.size) filtered = filtered.filter(r => prioritySet.has(normalizeFilterText(r.priority)));
+    if (statusSet.size) filtered = filtered.filter(r => statusSet.has(normalizeFilterText(r.status)));
     if (category && category !== 'ALL') filtered = filtered.filter(r => r.issueCategory === category);
     if (q) {
       const needle = q.toLowerCase();
@@ -1017,6 +1047,8 @@ select,input[type=date]{
   -webkit-appearance:none;letter-spacing:-0.01em;
 }
 select{padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236366f1'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+select.multi-select{min-width:150px;min-height:92px;padding-right:14px;background-image:none}
+select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
 select:hover,input[type=date]:hover{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
 select:focus,input[type=date]:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
 input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6) sepia(1) saturate(5) hue-rotate(210deg);cursor:pointer;opacity:0.8}
@@ -2483,15 +2515,15 @@ select option{background:#1a1f2e;color:#e8ecf4}
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-flag"></i> Priority</span>
-        <select id="iPriorityFilter" onchange="applyIssuesFilters()">
-          <option value="ALL">All Priorities</option>
+        <select id="iPriorityFilter" class="multi-select" multiple size="4" onchange="applyIssuesFilters()">
+          <option value="ALL" selected>All Priorities</option>
         </select>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
-        <select id="iStatusFilter" onchange="applyIssuesFilters()">
-          <option value="ALL">All Statuses</option>
+        <select id="iStatusFilter" class="multi-select" multiple size="4" onchange="applyIssuesFilters()">
+          <option value="ALL" selected>All Statuses</option>
         </select>
       </div>
       <div class="divider"></div>
@@ -5064,6 +5096,22 @@ function impactColor(i) {
   return IMPACT_COLORS[impactKey(i)] || IMPACT_COLORS.default;
 }
 
+function getMultiSelectValues(id) {
+  const sel = document.getElementById(id);
+  if (!sel) return [];
+  const selected = Array.from(sel.selectedOptions).map(o => o.value).filter(v => v && v !== 'ALL');
+  return selected.length ? selected : [];
+}
+
+function addMultiSelectParams(params, name, values) {
+  values.forEach(v => params.append(name, v));
+}
+
+function describeMulti(values, allLabel) {
+  if (!values.length) return null;
+  return values.length === 1 ? values[0] : values.length + ' ' + allLabel;
+}
+
 function issueStatusClass(s) {
   const t = (s || '').toLowerCase().trim();
   if (!t) return 'default';
@@ -5092,7 +5140,7 @@ async function initIssuesTab() {
     populateIStores(json.stores);
 
     const pSel = document.getElementById('iPriorityFilter');
-    pSel.innerHTML = '<option value="ALL">All Priorities</option>';
+    pSel.innerHTML = '<option value="ALL" selected>All Priorities</option>';
     // Sort priorities by severity (critical, high, medium, low, others)
     const priOrder = { critical: 1, high: 2, medium: 3, low: 4, default: 5 };
     [...json.priorities].sort((a,b) => (priOrder[priorityKey(a)]||9) - (priOrder[priorityKey(b)]||9))
@@ -5103,7 +5151,7 @@ async function initIssuesTab() {
       });
 
     const stSel = document.getElementById('iStatusFilter');
-    stSel.innerHTML = '<option value="ALL">All Statuses</option>';
+    stSel.innerHTML = '<option value="ALL" selected>All Statuses</option>';
     json.statuses.forEach(s => {
       const o = document.createElement('option');
       o.value = o.textContent = s;
@@ -5153,15 +5201,15 @@ function debouncedIssuesSearch() {
 async function applyIssuesFilters() {
   const area     = document.getElementById('iAreaFilter').value;
   const store    = document.getElementById('iStoreFilter').value;
-  const priority = document.getElementById('iPriorityFilter').value;
-  const status   = document.getElementById('iStatusFilter').value;
+  const priorities = getMultiSelectValues('iPriorityFilter');
+  const statuses   = getMultiSelectValues('iStatusFilter');
   const q        = document.getElementById('iSearch').value.trim();
 
   const params = new URLSearchParams();
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
-  if (priority !== 'ALL') params.set('priority', priority);
-  if (status !== 'ALL') params.set('status', status);
+  addMultiSelectParams(params, 'priority', priorities);
+  addMultiSelectParams(params, 'status', statuses);
   if (q) params.set('q', q);
 
   try {
@@ -5174,8 +5222,10 @@ async function applyIssuesFilters() {
     const parts = [];
     if (area !== 'ALL') parts.push(area);
     if (store !== 'ALL') parts.push(store);
-    if (priority !== 'ALL') parts.push(priority);
-    if (status !== 'ALL') parts.push(status);
+    const priorityDesc = describeMulti(priorities, 'priorities');
+    const statusDesc = describeMulti(statuses, 'statuses');
+    if (priorityDesc) parts.push(priorityDesc);
+    if (statusDesc) parts.push(statusDesc);
     document.getElementById('iTableInfo').textContent = parts.length ? parts.join(' · ') : 'All data';
 
     renderIssuesKPIs(iState.rows);

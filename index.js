@@ -38,7 +38,12 @@ function loadUserAccounts() {
   let accounts = [];
   const rawAccounts = process.env.USER_ACCOUNTS_JSON || process.env.USERS_JSON || process.env.USERS;
   if (rawAccounts) {
-    accounts = JSON.parse(rawAccounts);
+    try {
+      accounts = JSON.parse(rawAccounts);
+    } catch (err) {
+      console.error('USER_ACCOUNTS_JSON parse error:', err.message);
+      accounts = [];
+    }
   } else if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
     accounts = [{
       username: process.env.ADMIN_USERNAME,
@@ -68,10 +73,15 @@ function getLoginConfigStatus() {
     const rawAccounts = process.env.USER_ACCOUNTS_JSON || process.env.USERS_JSON || process.env.USERS;
     let parseOk = false;
     let rawCount = 0;
+    let parseError = '';
     if (rawAccounts) {
-      const parsed = JSON.parse(rawAccounts);
-      parseOk = Array.isArray(parsed);
-      rawCount = Array.isArray(parsed) ? parsed.length : 0;
+      try {
+        const parsed = JSON.parse(rawAccounts);
+        parseOk = Array.isArray(parsed);
+        rawCount = Array.isArray(parsed) ? parsed.length : 0;
+      } catch (err) {
+        parseError = err.message;
+      }
     }
     const loaded = loadUserAccounts();
     return {
@@ -82,6 +92,7 @@ function getLoginConfigStatus() {
       rawCount,
       loadedCount: loaded.length,
       usernames: loaded.map(u => u.username),
+      error: parseError,
     };
   } catch (err) {
     return {

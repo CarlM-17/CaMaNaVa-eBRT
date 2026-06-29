@@ -1,10 +1,12 @@
 const express = require('express');
 const { google } = require('googleapis');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 const SHEET_ID = process.env.SHEET_ID || '1PhRyLx2viByS1J-dOWWPwSmAZwNwzzaM6ATmbpQIR8w';
 const SHEET_NAME = 'DailySales';
@@ -13,6 +15,158 @@ const STORE_LIST_RANGE = 'ListOfStores!A:E';
 const CATEGORY_RANGE = 'CategorySales!A:I';
 const STORE_NOTES_RANGE = 'StoreNotes!A:M';
 const ISSUES_RANGE = 'StoreOpsIssuesAndConcerns!A5:R';
+const SESSION_COOKIE = 'camanava_session';
+const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const SESSION_SECRET = process.env.SESSION_SECRET || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || 'change-me-in-env';
+
+function normalizeKey(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function parseCookies(req) {
+  return String(req.headers.cookie || '').split(';').reduce((acc, part) => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return acc;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key) acc[key] = decodeURIComponent(value);
+    return acc;
+  }, {});
+}
+
+function loadUserAccounts() {
+  let accounts = [];
+  if (process.env.USER_ACCOUNTS_JSON) {
+    accounts = JSON.parse(process.env.USER_ACCOUNTS_JSON);
+  } else if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
+    accounts = [{
+      username: process.env.ADMIN_USERNAME,
+      password: process.env.ADMIN_PASSWORD,
+      name: process.env.ADMIN_NAME || process.env.ADMIN_USERNAME,
+      areas: ['*'],
+    }];
+  }
+
+  return accounts.map(u => {
+    const areas = Array.isArray(u.areas) ? u.areas : (u.area ? [u.area] : []);
+    return {
+      username: String(u.username || '').trim(),
+      name: String(u.name || u.username || '').trim(),
+      password: u.password,
+      passwordHash: u.passwordHash,
+      areas: areas.map(a => String(a || '').trim()).filter(Boolean),
+    };
+  }).filter(u => u.username && (u.password || u.passwordHash) && u.areas.length);
+}
+
+let USER_ACCOUNTS = loadUserAccounts();
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(String(password || '')).digest('hex');
+}
+
+function verifyPassword(user, password) {
+  if (user.passwordHash) return hashPassword(password) === String(user.passwordHash).toLowerCase();
+  return String(user.password) === String(password);
+}
+
+function signSession(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  return body + '.' + sig;
+}
+
+function verifySession(token) {
+  if (!token || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  if (Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  if (!payload.exp || Date.now() > payload.exp) return null;
+  return payload;
+}
+
+function getRequestUser(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  const session = verifySession(token);
+  if (!session || !session.username) return null;
+  const user = USER_ACCOUNTS.find(u => u.username === session.username);
+  if (!user) return null;
+  return { username: user.username, name: user.name, areas: user.areas };
+}
+
+function setSessionCookie(res, user) {
+  const token = signSession({ username: user.username, exp: Date.now() + SESSION_MAX_AGE_MS });
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}${secure}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+function requireAuth(req, res, next) {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Authentication required' });
+  req.user = user;
+  next();
+}
+
+function userCanSeeAll(user) {
+  return (user.areas || []).some(a => ['*', 'all'].includes(normalizeKey(a)));
+}
+
+function scopeRowsByArea(rows, user) {
+  if (userCanSeeAll(user)) return rows;
+  const allowed = new Set((user.areas || []).map(normalizeKey));
+  return rows.filter(r => allowed.has(normalizeKey(r.area)));
+}
+
+function scopeStoresByArea(stores, user) {
+  return scopeRowsByArea(stores, user);
+}
+
+function userAreaLabels(user) {
+  return userCanSeeAll(user) ? ['ALL'] : user.areas;
+}
+
+const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>CaMaNaVa eBRT Login</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0a0e1a;--panel:#151b2d;--border:#26324f;--text:#f0f3fb;--muted:#94a3b8;--accent:#6366f1;--accent2:#10b981;--err:#fb7185}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 20%,rgba(99,102,241,.22),transparent 32%),linear-gradient(135deg,#070a12,#111827);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--text);padding:20px}
+    .card{width:min(420px,100%);background:rgba(21,27,45,.94);border:1px solid var(--border);border-radius:16px;padding:28px;box-shadow:0 24px 80px rgba(0,0,0,.38)}
+    h1{margin:0 0 6px;font-size:24px;letter-spacing:-.02em}
+    p{margin:0 0 24px;color:var(--muted);font-size:14px}
+    label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin:16px 0 7px}
+    input{width:100%;border:1px solid var(--border);background:#0f1423;color:var(--text);border-radius:10px;padding:12px 13px;font-size:15px;outline:none}
+    input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.2)}
+    button{width:100%;margin-top:22px;border:0;border-radius:10px;padding:12px 14px;background:linear-gradient(135deg,var(--accent),#4f46e5);color:white;font-weight:800;font-size:14px;cursor:pointer}
+    .error{display:none;margin-top:14px;color:var(--err);font-size:13px}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/login">
+    <h1>CaMaNaVa eBRT</h1>
+    <p>Sign in to view the areas assigned to your account.</p>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" required autofocus/>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required/>
+    <button type="submit">Log in</button>
+    <div class="error" id="error">Invalid username or password.</div>
+  </form>
+  <script>
+    if (new URLSearchParams(location.search).get('error')) document.getElementById('error').style.display = 'block';
+  </script>
+</body>
+</html>`;
 
 function getAuthClient() {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
@@ -355,11 +509,39 @@ async function getIssuesData(sheets) {
 }
 
 // ─── API: GET /api/sales ─────────────────────────────────────────────────────
+app.post('/login', (req, res) => {
+  try {
+    USER_ACCOUNTS = loadUserAccounts();
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    const user = USER_ACCOUNTS.find(u => u.username === username);
+    if (!user || !verifyPassword(user, password)) return res.redirect('/?error=1');
+    setSessionCookie(res, user);
+    res.redirect('/');
+  } catch (err) {
+    console.error('Login error:', err.message);
+    res.redirect('/?error=1');
+  }
+});
+
+app.post('/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.redirect('/');
+});
+
+app.use('/api', requireAuth);
+
+app.get('/api/me', (req, res) => {
+  res.json({ success: true, user: { username: req.user.username, name: req.user.name, areas: userAreaLabels(req.user) } });
+});
+
 app.get('/api/sales', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const [data, masterStores] = await Promise.all([getSalesData(sheets), getMasterStoreList(sheets)]);
+    let [data, masterStores] = await Promise.all([getSalesData(sheets), getMasterStoreList(sheets)]);
+    data = scopeRowsByArea(data, req.user);
+    masterStores = scopeStoresByArea(masterStores, req.user);
     const { date, area, store } = req.query;
     let filtered = data;
     if (date) filtered = filtered.filter((r) => r.date === date);
@@ -410,7 +592,8 @@ app.get('/api/filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const masterStores = await getMasterStoreList(sheets);
+    let masterStores = await getMasterStoreList(sheets);
+    masterStores = scopeStoresByArea(masterStores, req.user);
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
@@ -431,7 +614,8 @@ app.get('/api/months', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getSalesData(sheets);
+    let data = await getSalesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const monthSet = new Set();
     data.forEach(r => { const k = monthKey(r.date); if (k) monthSet.add(k); });
     const months = [...monthSet].sort().map(k => ({ value: k, label: monthLabel(k) }));
@@ -446,7 +630,8 @@ app.get('/api/monthly', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getSalesData(sheets);
+    let data = await getSalesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { month, area, store, sign } = req.query;
 
     let filtered = data;
@@ -507,7 +692,8 @@ app.get('/api/category-filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getCategoryData(sheets);
+    let data = await getCategoryData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area: filterArea } = req.query;
     const monthSet = [];
     const seenMonths = new Set();
@@ -533,7 +719,8 @@ app.get('/api/category', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getCategoryData(sheets);
+    let data = await getCategoryData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { month, category, area, store, sign } = req.query;
     let filtered = data;
     if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
@@ -646,7 +833,8 @@ app.get('/api/category-breakdown', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getCategoryData(sheets);
+    let data = await getCategoryData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { month, category, area, store, breakdownCategory, breakdownSubDep } = req.query;
     let filtered = data;
     if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
@@ -694,7 +882,8 @@ app.get('/api/averages', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getSalesData(sheets);
+    let data = await getSalesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area, store } = req.query;
     let filtered = data.filter(r => {
       if (!r.date || !r.sales || r.sales <= 0) return false;
@@ -744,7 +933,8 @@ app.get('/api/store-notes', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getStoreNotesData(sheets);
+    let data = await getStoreNotesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area, store, status, q } = req.query;
     let filtered = data;
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
@@ -773,7 +963,8 @@ app.get('/api/store-notes-filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getStoreNotesData(sheets);
+    let data = await getStoreNotesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
@@ -803,7 +994,8 @@ app.get('/api/issues-filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getIssuesData(sheets);
+    let data = await getIssuesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
@@ -838,7 +1030,8 @@ app.get('/api/issues', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    const data = await getIssuesData(sheets);
+    let data = await getIssuesData(sheets);
+    data = scopeRowsByArea(data, req.user);
     const { area, store, priority, status, category, q } = req.query;
     let filtered = data;
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
@@ -1752,6 +1945,12 @@ select option{background:#1a1f2e;color:#e8ecf4}
     </div>
   </div>
   <div class="header-right">
+    <div id="userBadge" class="badge loading-badge">Signed in</div>
+    <form method="post" action="/logout" style="margin:0">
+      <button class="sync-btn" type="submit">
+        <i class="fa fa-right-from-bracket"></i> Logout
+      </button>
+    </form>
     <div id="statusBadge" class="badge loading-badge"><span class="pulse"></span> Loading</div>
     <button class="sync-btn" id="syncBtn" onclick="loadFilters(true)">
       <i class="fa fa-rotate" id="syncIcon"></i> Refresh
@@ -2697,6 +2896,13 @@ if (window.Chart) {
 }
 
 // ─── Vibrant area palette ──────────────────────────────────────────────────
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await nativeFetch(...args);
+  if (res.status === 401) window.location.href = '/';
+  return res;
+};
+
 const AREA_COLORS = {
   'Valenzuela':      '#6366f1',  // indigo
   'South Caloocan':  '#10b981',  // emerald
@@ -2788,9 +2994,21 @@ function initials(name) {
   return (name || '?').split(/\\s+/).filter(Boolean).slice(0,2).map(w => w[0]).join('').toUpperCase();
 }
 
+async function loadCurrentUser() {
+  try {
+    const res = await fetch('/api/me');
+    const json = await res.json();
+    if (!json.success) return;
+    const user = json.user || {};
+    const areas = (user.areas || []).join(', ');
+    document.getElementById('userBadge').textContent = (user.name || user.username || 'User') + (areas ? ' - ' + areas : '');
+  } catch(e) {}
+}
+
 async function loadFilters() {
   setSyncing(true);
   try {
+    await loadCurrentUser();
     const res = await fetch('/api/filters');
     const json = await res.json();
     if (!json.success) throw new Error(json.error);
@@ -5706,7 +5924,13 @@ loadFilters();
 </html>
 `;
 
-app.get('/', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(HTML); });
-app.get('*', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(HTML); });
+app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(getRequestUser(req) ? HTML : LOGIN_HTML);
+});
+app.get('*', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(getRequestUser(req) ? HTML : LOGIN_HTML);
+});
 
 app.listen(PORT, () => console.log('CaMaNaVa eBRT running on port ' + PORT));

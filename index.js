@@ -36,8 +36,9 @@ function parseCookies(req) {
 
 function loadUserAccounts() {
   let accounts = [];
-  if (process.env.USER_ACCOUNTS_JSON) {
-    accounts = JSON.parse(process.env.USER_ACCOUNTS_JSON);
+  const rawAccounts = process.env.USER_ACCOUNTS_JSON || process.env.USERS_JSON || process.env.USERS;
+  if (rawAccounts) {
+    accounts = JSON.parse(rawAccounts);
   } else if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
     accounts = [{
       username: process.env.ADMIN_USERNAME,
@@ -61,6 +62,40 @@ function loadUserAccounts() {
 }
 
 let USER_ACCOUNTS = loadUserAccounts();
+
+function getLoginConfigStatus() {
+  try {
+    const rawAccounts = process.env.USER_ACCOUNTS_JSON || process.env.USERS_JSON || process.env.USERS;
+    let parseOk = false;
+    let rawCount = 0;
+    if (rawAccounts) {
+      const parsed = JSON.parse(rawAccounts);
+      parseOk = Array.isArray(parsed);
+      rawCount = Array.isArray(parsed) ? parsed.length : 0;
+    }
+    const loaded = loadUserAccounts();
+    return {
+      hasUserAccountsJson: Boolean(process.env.USER_ACCOUNTS_JSON),
+      hasFallbackUsersJson: Boolean(process.env.USERS_JSON || process.env.USERS),
+      hasAdminFallback: Boolean(process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD),
+      parseOk,
+      rawCount,
+      loadedCount: loaded.length,
+      usernames: loaded.map(u => u.username),
+    };
+  } catch (err) {
+    return {
+      hasUserAccountsJson: Boolean(process.env.USER_ACCOUNTS_JSON),
+      hasFallbackUsersJson: Boolean(process.env.USERS_JSON || process.env.USERS),
+      hasAdminFallback: Boolean(process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD),
+      parseOk: false,
+      rawCount: 0,
+      loadedCount: 0,
+      usernames: [],
+      error: err.message,
+    };
+  }
+}
 
 function hashPassword(password) {
   return crypto.createHash('sha256').update(String(password || '')).digest('hex');
@@ -162,8 +197,19 @@ const LOGIN_HTML = `<!DOCTYPE html>
     <input id="password" name="password" type="password" autocomplete="current-password" required/>
     <button type="submit">Log in</button>
     <div class="error" id="error">Invalid username or password.</div>
+    <div style="margin-top:14px;color:var(--muted);font-size:12px;line-height:1.45" id="configStatus">Checking login config...</div>
   </form>
   <script>
+    fetch('/login-status')
+      .then(r => r.json())
+      .then(s => {
+        const el = document.getElementById('configStatus');
+        el.textContent = 'Config: USER_ACCOUNTS_JSON=' + (s.hasUserAccountsJson ? 'yes' : 'no') +
+          ', parsed=' + (s.parseOk ? 'yes' : 'no') +
+          ', users=' + s.loadedCount +
+          (s.usernames && s.usernames.length ? ' (' + s.usernames.join(', ') + ')' : '');
+      })
+      .catch(() => {});
     const err = new URLSearchParams(location.search).get('error');
     if (err) {
       const messages = {
@@ -541,6 +587,10 @@ app.post('/login', (req, res) => {
 app.post('/logout', (req, res) => {
   clearSessionCookie(res);
   res.redirect('/');
+});
+
+app.get('/login-status', (req, res) => {
+  res.json(getLoginConfigStatus());
 });
 
 app.use('/api', requireAuth);

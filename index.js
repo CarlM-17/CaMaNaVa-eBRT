@@ -749,7 +749,8 @@ app.get('/api/store-notes', async (req, res) => {
     let filtered = data;
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
-    if (status && status !== 'ALL') filtered = filtered.filter(r => r.status === status);
+    const statusSet = parseMultiFilterParam(status);
+    if (statusSet.size) filtered = filtered.filter(r => statusSet.has(normalizeFilterText(r.status) || '__blank__'));
     if (q) {
       const needle = q.toLowerCase();
       filtered = filtered.filter(r =>
@@ -776,10 +777,11 @@ app.get('/api/store-notes-filters', async (req, res) => {
     const { area: filterArea } = req.query;
     const areas = new Set();
     const stores = new Set();
-    const statuses = new Set();
+    const statuses = new Map();
     data.forEach(r => {
       if (r.area) areas.add(r.area);
-      if (r.status) statuses.add(r.status);
+      const statusKey = normalizeFilterText(r.status);
+      if (statusKey && statusKey !== 'status') addCanonicalFilterValue(statuses, r.status);
       if (r.storeName) {
         if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
       }
@@ -788,7 +790,7 @@ app.get('/api/store-notes-filters', async (req, res) => {
       success: true,
       areas: [...areas].sort(),
       stores: [...stores].sort(),
-      statuses: [...statuses].sort(),
+      statuses: [...statuses.values()].sort((a, b) => normalizeFilterText(a).localeCompare(normalizeFilterText(b))),
     });
   } catch (err) {
     console.error('Store-notes-filters error:', err.message);
@@ -1779,7 +1781,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
     </button>
   </div>
 
-  <!-- ═══════════════════ DAILY TAB ═══════════════════ -->
+  <!--  DAILY TAB  -->
   <div class="tab-content active" id="tab-daily">
 
   <!-- Controls -->
@@ -1865,7 +1867,6 @@ select option{background:#1a1f2e;color:#e8ecf4}
         <thead>
           <tr>
             <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortDaily('storeName','string')">Store <span class="sort-icon">⇅</span></th>
-            <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortDaily('area','string')">Area <span class="sort-icon">⇅</span></th>
             <th class="sortable" data-sort-key="sales" data-sort-type="num" style="text-align:right" onclick="sortDaily('sales','num')">Sales <span class="sort-icon">⇅</span></th>
             <th class="sortable" data-sort-key="salesLY" data-sort-type="num" style="text-align:right" onclick="sortDaily('salesLY','num')">Sales LY <span class="sort-icon">⇅</span></th>
             <th class="sortable" data-sort-key="diffPct" data-sort-type="num" style="text-align:center" onclick="sortDaily('diffPct','num')">Diff % <span class="sort-icon">⇅</span></th>
@@ -1874,7 +1875,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
           </tr>
         </thead>
         <tbody id="tableBody">
-          <tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading data...</p></td></tr>
+          <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading data...</p></td></tr>
         </tbody>
       </table>
     </div>
@@ -1932,7 +1933,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-daily -->
 
-  <!-- ═══════════════════ MONTHLY TAB ═══════════════════ -->
+  <!--  MONTHLY TAB  -->
   <div class="tab-content" id="tab-monthly">
 
     <!-- Controls -->
@@ -2097,7 +2098,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-monthly -->
 
-  <!-- ═══════════════════ CATEGORY SALES TAB ═══════════════════ -->
+  <!--  CATEGORY SALES TAB  -->
   <div class="tab-content" id="tab-category">
 
     <!-- Controls -->
@@ -2329,7 +2330,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-category -->
 
-  <!-- ═══════════════════ STORE NOTES TAB ═══════════════════ -->
+  <!--  STORE NOTES TAB  -->
   <div class="tab-content" id="tab-notes">
 
     <!-- Controls -->
@@ -2350,9 +2351,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
-        <select id="nStatusFilter" onchange="applyNotesFilters()">
-          <option value="ALL">All Statuses</option>
-        </select>
+        <div id="nStatusFilter" class="check-filter"></div>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group" style="flex:1;min-width:180px">
@@ -2373,9 +2372,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
           <thead>
             <tr>
               <th class="sortable" data-sort-key="ts" data-sort-type="num" onclick="sortNotes('ts','num')">Time Stamp <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="storeId" data-sort-type="string" onclick="sortNotes('storeId','string')">Store ID <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortNotes('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortNotes('area','string')">Area <span class="sort-icon">⇅</span></th>
               <th>Notes</th>
               <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortNotes('status','string')">Status <span class="sort-icon">⇅</span></th>
               <th>Remarks</th>
@@ -2383,7 +2380,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
             </tr>
           </thead>
           <tbody id="nTableBody">
-            <tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
@@ -2502,7 +2499,7 @@ select option{background:#1a1f2e;color:#e8ecf4}
 
   </div><!-- /tab-notes -->
 
-  <!-- ═══════════════════ ISSUES & CONCERNS TAB ═══════════════════ -->
+  <!--  ISSUES & CONCERNS TAB  -->
   <div class="tab-content" id="tab-issues">
 
     <!-- Controls -->
@@ -2809,7 +2806,7 @@ async function loadFilters() {
     document.getElementById('dateFilter').value = today();
     await applyFilters();
   } catch(e) {
-    setStatus('error', '● Error');
+    setStatus('error', ' Error');
     console.error(e);
     showTableError('Failed to load. Check server and sheet permissions.');
   } finally {
@@ -2906,7 +2903,7 @@ function renderKPIs(rows) {
 function renderTable(rows) {
   const tbody = document.getElementById('tableBody');
   if (!rows.length) {
-    tbody.innerHTML = \`<tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No data for selected filters</p><small>Try a different date or area</small></td></tr>\`;
+    tbody.innerHTML = \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No data for selected filters</p><small>Try a different date or area</small></td></tr>\`;
     return;
   }
   const totSales = rows.reduce((s,r)=>s+r.sales,0);
@@ -2932,12 +2929,6 @@ function renderTable(rows) {
           </div>
         </div>
       </td>
-      <td>
-        <span class="area-tag">
-          <span class="area-dot" style="background:\${color};color:\${color}"></span>
-          \${r.area || '—'}
-        </span>
-      </td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(r.sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(r.salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctStr}</span></td>
@@ -2949,7 +2940,7 @@ function renderTable(rows) {
   const totPctCls = totPct > 0.05 ? 'up' : totPct < -0.05 ? 'down' : 'flat';
   const totArrow = totPct > 0.05 ? '↑' : totPct < -0.05 ? '↓' : '—';
   html += \`<tr class="summary-row">
-    <td colspan="2" style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--indigo2)">TOTAL · \${rows.length} STORES</td>
+    <td style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--indigo2)">TOTAL - \${rows.length} STORES</td>
     <td style="text-align:right"><span class="num">\${fmtFull(totSales)}</span></td>
     <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(totLY)}</span></td>
     <td style="text-align:center"><span class="pill \${totPctCls}">\${totArrow} \${Math.abs(totPct).toFixed(2)}%</span></td>
@@ -3134,7 +3125,7 @@ function renderMissing(missing, hasDateFilter) {
   }).join('');
 }
 
-// ═══════════════════════ MONTHLY TAB ═══════════════════════════════════════
+//  MONTHLY TAB 
 async function initMonthlyTab() {
   try {
     // Get available months from /api/months
@@ -3812,7 +3803,7 @@ function drawAvgAreaChart(perArea) {
   });
 }
 
-// ═══════════════════════ CATEGORY SALES TAB ═══════════════════════════════
+//  CATEGORY SALES TAB 
 const CATEGORY_PALETTE = ['#6366f1','#10b981','#f59e0b','#a855f7','#06b6d4','#ec4899','#f43f5e','#22d3ee','#fbbf24','#34d399','#818cf8','#c084fc','#fb7185','#84cc16','#0ea5e9','#d946ef'];
 
 function colorForCategory(name, idx) {
@@ -4516,7 +4507,7 @@ function exportCategoryToExcel() {
   XLSX.writeFile(wb, parts.join('_') + '.xlsx');
 }
 
-// ═══════════════════════ STORE NOTES TAB ═══════════════════════════════════
+//  STORE NOTES TAB 
 const nState = {
   initialized: false,
   rows: [],
@@ -4544,20 +4535,14 @@ async function initNotesTab() {
 
     populateNStores(json.stores);
 
-    const stSel = document.getElementById('nStatusFilter');
-    stSel.innerHTML = '<option value="ALL">All Statuses</option>';
-    json.statuses.forEach(s => {
-      const o = document.createElement('option');
-      o.value = o.textContent = s;
-      stSel.appendChild(o);
-    });
+    renderNotesStatusFilter(json.statuses);
 
     nState.initialized = true;
     await applyNotesFilters();
   } catch(e) {
     console.error('Notes init error:', e);
     document.getElementById('nTableBody').innerHTML =
-      \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+      \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
   }
 }
 
@@ -4569,6 +4554,54 @@ function populateNStores(stores) {
     o.value = o.textContent = s;
     sel.appendChild(o);
   });
+}
+
+function renderNotesStatusFilter(statuses) {
+  const wrap = document.getElementById('nStatusFilter');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const noteStatusKey = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+  const options = [
+    { value: 'ALL', label: 'All Status', checked: true },
+    { value: '__blank__', label: 'All Blank', checked: false },
+    ...statuses
+      .filter(s => noteStatusKey(s) && noteStatusKey(s) !== 'status')
+      .map(s => ({ value: s, label: s, checked: false }))
+  ];
+
+  options.forEach(opt => {
+    const label = document.createElement('label');
+    label.innerHTML = '<input type="checkbox" value="' + escHtml(opt.value) + '"' + (opt.checked ? ' checked' : '') + '> ' + escHtml(opt.label);
+    wrap.appendChild(label);
+  });
+
+  wrap.querySelectorAll('input').forEach(input => {
+    input.addEventListener('change', e => onNotesStatusFilterChange(e));
+  });
+}
+
+function onNotesStatusFilterChange(e) {
+  const wrap = document.getElementById('nStatusFilter');
+  if (!wrap) return;
+  const all = wrap.querySelector('input[value="ALL"]');
+  const items = Array.from(wrap.querySelectorAll('input:not([value="ALL"])'));
+  if (e && e.target === all && all.checked) {
+    items.forEach(input => { input.checked = false; });
+  } else {
+    const anyChecked = items.some(input => input.checked);
+    if (all) all.checked = !anyChecked;
+  }
+  applyNotesFilters();
+}
+
+function getNotesStatusValues() {
+  const wrap = document.getElementById('nStatusFilter');
+  if (!wrap) return [];
+  return Array.from(wrap.querySelectorAll('input:checked'))
+    .map(input => input.value)
+    .filter(value => value && value !== 'ALL');
 }
 
 async function onNAreaChange() {
@@ -4595,13 +4628,13 @@ function debouncedNotesSearch() {
 async function applyNotesFilters() {
   const area   = document.getElementById('nAreaFilter').value;
   const store  = document.getElementById('nStoreFilter').value;
-  const status = document.getElementById('nStatusFilter').value;
+  const statuses = getNotesStatusValues();
   const q      = document.getElementById('nSearch').value.trim();
 
   const params = new URLSearchParams();
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
-  if (status !== 'ALL') params.set('status', status);
+  statuses.forEach(status => params.append('status', status));
   if (q) params.set('q', q);
 
   try {
@@ -4616,7 +4649,7 @@ async function applyNotesFilters() {
   } catch(e) {
     console.error(e);
     document.getElementById('nTableBody').innerHTML =
-      \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+      \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
   }
 }
 
@@ -4736,7 +4769,7 @@ document.addEventListener('keydown', e => {
 function renderNotesTable(rows) {
   const tbody = document.getElementById('nTableBody');
   if (!rows.length) {
-    tbody.innerHTML = \`<tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No notes found</p><small>Try adjusting your filters</small></td></tr>\`;
+    tbody.innerHTML = \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No notes found</p><small>Try adjusting your filters</small></td></tr>\`;
     return;
   }
 
@@ -4760,7 +4793,6 @@ function renderNotesTable(rows) {
 
     return \`<tr>
       <td><div class="timestamp-cell">\${formatTimestamp(r.timestamp)}</div></td>
-      <td><span class="num num-bold" style="color:var(--text-1)">#\${r.storeId || '—'}</span></td>
       <td>
         <div class="store-cell">
           <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]});width:36px;height:36px;font-size:12.5px">\${initials(r.storeName)}</div>
@@ -4769,7 +4801,6 @@ function renderNotesTable(rows) {
           </div>
         </div>
       </td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${areaColor};color:\${areaColor}"></span>\${r.area || '—'}</span></td>
       <td><div class="notes-cell">\${notes}</div></td>
       <td><span class="status-pill \${stCls}"><i class="fa \${stIcon}"></i> \${r.status || '—'}</span></td>
       <td><div class="remarks-cell">\${remarks}</div></td>
@@ -5080,7 +5111,7 @@ function sortNotes(key, type) {
   updateSortHeaders('nTableBody', nState.sort);
 }
 
-// ═══════════════════════ ISSUES & CONCERNS TAB ════════════════════════════
+//  ISSUES & CONCERNS TAB 
 const iState = {
   initialized: false,
   rows: [],
@@ -5666,7 +5697,7 @@ function setSyncing(on) {
 
 function hideOverlay() { document.getElementById('loadingOverlay').style.display = 'none'; }
 function showTableError(msg) {
-  document.getElementById('tableBody').innerHTML = \`<tr><td colspan="7" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${msg}</p></td></tr>\`;
+  document.getElementById('tableBody').innerHTML = \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${msg}</p></td></tr>\`;
 }
 
 loadFilters();

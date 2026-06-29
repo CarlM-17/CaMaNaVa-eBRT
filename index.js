@@ -14,11 +14,38 @@ const CATEGORY_RANGE = 'CategorySales!A:I';
 const STORE_NOTES_RANGE = 'StoreNotes!A:M';
 const ISSUES_RANGE = 'StoreOpsIssuesAndConcerns!A5:R';
 
+function parseGoogleCredentials(raw) {
+  const attempts = [
+    raw,
+    String(raw || '').replace(/^['"]|['"]$/g, ''),
+  ];
+
+  try {
+    const decoded = Buffer.from(String(raw || ''), 'base64').toString('utf8');
+    if (decoded && decoded.includes('{')) attempts.push(decoded);
+  } catch (err) {}
+
+  for (const value of attempts) {
+    if (!value) continue;
+    try {
+      let credentials = JSON.parse(value);
+      if (typeof credentials === 'string') credentials = JSON.parse(credentials);
+      if (credentials && credentials.private_key) {
+        credentials.private_key = String(credentials.private_key).replace(/\\n/g, '\n');
+      }
+      if (credentials && credentials.client_email && credentials.private_key) return credentials;
+    } catch (err) {}
+  }
+
+  throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is invalid. Paste the full Google service account JSON as one Railway variable.');
+}
+
 function getAuthClient() {
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+  const rawCredentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_CREDENTIALS_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+  if (!rawCredentials) {
     throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON env variable is not set');
   }
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const credentials = parseGoogleCredentials(rawCredentials);
   return new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
@@ -882,6 +909,11 @@ const HTML = `<!DOCTYPE html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+try {
+  if (localStorage.getItem('camanava-theme') === 'light') document.documentElement.classList.add('theme-light');
+} catch (err) {}
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -931,6 +963,35 @@ const HTML = `<!DOCTYPE html>
   --pink2:#f472b6;
 }
 
+html.theme-light{
+  color-scheme:light;
+  --bg-base:#f4faf9;
+  --bg-deep:#e8f4f2;
+  --bg-glass:rgba(255,255,255,0.82);
+  --bg-glass2:rgba(241,249,248,0.9);
+  --bg-card:rgba(255,255,255,0.92);
+  --bg-elevated:rgba(255,255,255,0.98);
+
+  --border-glow:rgba(10,92,112,0.18);
+  --border-soft:rgba(15,93,117,0.16);
+  --border-strong:rgba(15,93,117,0.28);
+
+  --text-1:#102b3a;
+  --text-2:#3e6171;
+  --text-3:#6e8896;
+  --text-dim:#94a7ae;
+
+  --indigo:#0f766e;
+  --indigo2:#0891b2;
+  --indigo-glow:rgba(8,145,178,0.25);
+  --cyan:#0891b2;
+  --cyan2:#06b6d4;
+  --cyan-glow:rgba(8,145,178,0.22);
+  --emerald:#047857;
+  --emerald2:#10b981;
+  --emerald-glow:rgba(16,185,129,0.22);
+}
+
 html,body{background:var(--bg-base);color:var(--text-1);min-height:100vh;overflow-x:hidden;font-family:'Inter',sans-serif;font-weight:400;letter-spacing:-0.005em}
 
 /* Animated gradient background */
@@ -957,6 +1018,19 @@ body::after{
     linear-gradient(90deg, rgba(99,148,255,0.025) 1px, transparent 1px);
   background-size:48px 48px;
   mask-image:radial-gradient(ellipse at center, black 30%, transparent 80%);
+}
+
+html.theme-light body::before{
+  background:
+    radial-gradient(at 12% 8%, rgba(8,145,178,0.16) 0px, transparent 48%),
+    radial-gradient(at 88% 12%, rgba(16,185,129,0.12) 0px, transparent 48%),
+    radial-gradient(at 72% 88%, rgba(15,118,110,0.12) 0px, transparent 52%),
+    linear-gradient(180deg,#f8fcfb 0%,#eef8f6 100%);
+}
+html.theme-light body::after{
+  background-image:
+    linear-gradient(rgba(15,93,117,0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,93,117,0.055) 1px, transparent 1px);
 }
 
 /* ── Header ── */
@@ -988,6 +1062,11 @@ body::after{
 }
 .logo-text{font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:600;letter-spacing:-0.5px;line-height:1.1;background:linear-gradient(135deg,#fff 0%,#a8b3d1 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .logo-sub{font-size:10px;color:var(--text-3);letter-spacing:1.5px;text-transform:uppercase;margin-top:3px;font-weight:500}
+html.theme-light .header{
+  background:linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,252,250,0.82) 100%);
+  box-shadow:0 10px 28px -24px rgba(15,93,117,0.35);
+}
+html.theme-light .logo-text{background:linear-gradient(135deg,#0b2534 0%,#0f766e 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 
 .header-right{display:flex;align-items:center;gap:12px}
 .sync-btn{
@@ -1005,6 +1084,7 @@ body::after{
 }
 .sync-btn:active{transform:translateY(0)}
 .sync-btn.loading i{animation:spin 0.8s linear infinite}
+.theme-toggle{min-width:112px;justify-content:center}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .badge{
@@ -1062,6 +1142,18 @@ select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
 select:hover,input[type=date]:hover{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
 select:focus,input[type=date]:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
 input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6) sepia(1) saturate(5) hue-rotate(210deg);cursor:pointer;opacity:0.8}
+html.theme-light select,
+html.theme-light input[type=date],
+html.theme-light .check-filter{
+  background:rgba(255,255,255,0.94);
+  color:var(--text-1);
+}
+html.theme-light select:hover,
+html.theme-light input[type=date]:hover,
+html.theme-light .check-filter:hover{
+  background:rgba(235,249,247,0.98);
+}
+html.theme-light input[type=date]::-webkit-calendar-picker-indicator{filter:none;opacity:.72}
 .divider{width:1px;height:24px;background:linear-gradient(180deg, transparent, var(--border-strong), transparent);margin:0 4px}
 .records-count{margin-left:auto;font-size:12px;color:var(--text-2);font-weight:500}
 .records-count span{color:var(--indigo2);font-weight:600;font-family:'JetBrains Mono',monospace}
@@ -1623,6 +1715,33 @@ select option{background:#1a1f2e;color:#e8ecf4}
   font-size:12.5px;color:var(--text-2);font-weight:500;line-height:1.5;
 }
 
+html.theme-light .controls,
+html.theme-light .kpi,
+html.theme-light .chart-card,
+html.theme-light .table-card,
+html.theme-light .tabs,
+html.theme-light .missing-card{
+  box-shadow:0 14px 32px -26px rgba(15,93,117,0.38);
+}
+html.theme-light th{
+  background:rgba(238,248,246,0.96);
+  color:#5c7480;
+}
+html.theme-light tbody tr:hover td{background:rgba(8,145,178,0.055)}
+html.theme-light .tab-btn.active{
+  background:linear-gradient(135deg, rgba(15,118,110,0.15), rgba(8,145,178,0.16));
+  color:#0b3a42;
+  border-color:rgba(8,145,178,0.35);
+}
+html.theme-light select option{background:#ffffff;color:#102b3a}
+html.theme-light .sign-toggle{background:rgba(255,255,255,0.92)}
+html.theme-light #nSearch,
+html.theme-light #iSearch{
+  background:rgba(255,255,255,0.94) !important;
+  color:var(--text-1) !important;
+}
+html.theme-light .loading-overlay{background:rgba(244,250,249,0.88)}
+
 /* ── Mobile performance ── */
 @media (max-width: 768px) {
   /* Kill backdrop-filter on mobile — biggest perf win */
@@ -1688,10 +1807,23 @@ select option{background:#1a1f2e;color:#e8ecf4}
   .legend-dot{box-shadow:none !important}
   .kpi:hover{transform:none !important}
 }
+@media (max-width: 768px) {
+  html.theme-light .header{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .controls{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .kpi{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .chart-card{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .table-card{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .missing-card{background:rgba(255,255,255,0.98) !important}
+  html.theme-light .tabs{background:rgba(255,255,255,0.98) !important}
+  .theme-toggle{min-width:44px;padding:9px 11px}
+  .theme-toggle span{display:none}
+}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:rgba(15,20,35,0.4)}
 ::-webkit-scrollbar-thumb{background:linear-gradient(180deg, var(--indigo), #4f46e5);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg, var(--indigo2), var(--indigo))}
+html.theme-light ::-webkit-scrollbar-track{background:rgba(225,241,238,0.7)}
+html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#0891b2,#0f766e)}
 
 /* ── Animation ── */
 @keyframes fadeInUp{
@@ -1752,6 +1884,9 @@ select option{background:#1a1f2e;color:#e8ecf4}
     </div>
   </div>
   <div class="header-right">
+    <button class="sync-btn theme-toggle" id="themeToggle" type="button" onclick="toggleTheme()" aria-label="Switch to daylight mode">
+      <i class="fa fa-sun" id="themeIcon"></i> <span id="themeText">Daylight</span>
+    </button>
     <div id="statusBadge" class="badge loading-badge"><span class="pulse"></span> Loading</div>
     <button class="sync-btn" id="syncBtn" onclick="loadFilters(true)">
       <i class="fa fa-rotate" id="syncIcon"></i> Refresh
@@ -2766,6 +2901,7 @@ function switchTab(tab) {
   if (tab === 'issues' && !iState.initialized) {
     initIssuesTab();
   }
+  setTimeout(recolorExistingCharts, 50);
 }
 
 function today() { return new Date().toLocaleDateString('en-CA'); }
@@ -2788,12 +2924,97 @@ function initials(name) {
   return (name || '?').split(/\\s+/).filter(Boolean).slice(0,2).map(w => w[0]).join('').toUpperCase();
 }
 
+function isLightTheme() {
+  return document.documentElement.classList.contains('theme-light');
+}
+
+function chartPalette() {
+  return isLightTheme()
+    ? {
+        strong: '#102b3a',
+        muted: '#3e6171',
+        grid: 'rgba(15,93,117,0.12)',
+        gridSoft: 'rgba(15,93,117,0.08)',
+        tooltipBg: 'rgba(255,255,255,0.96)',
+        tooltipBorder: 'rgba(8,145,178,0.35)',
+        dataLabel: '#102b3a',
+      }
+    : {
+        strong: '#f0f3fb',
+        muted: '#a8b3d1',
+        grid: 'rgba(148,163,200,0.06)',
+        gridSoft: 'rgba(148,163,200,0.04)',
+        tooltipBg: 'rgba(15,20,35,0.95)',
+        tooltipBorder: 'rgba(99,102,241,0.4)',
+        dataLabel: '#e8ecf4',
+      };
+}
+
+function recolorChartOptions(obj, palette) {
+  if (!obj || typeof obj !== 'object') return;
+  Object.keys(obj).forEach(key => {
+    const val = obj[key];
+    if (key === 'titleColor') obj[key] = palette.strong;
+    else if (key === 'bodyColor') obj[key] = palette.muted;
+    else if (key === 'color') obj[key] = val === '#e8ecf4' ? palette.dataLabel : palette.muted;
+    else if (key === 'backgroundColor' && typeof val === 'string' && val.includes('15,20,35')) obj[key] = palette.tooltipBg;
+    else if (key === 'borderColor' && typeof val === 'string' && (val.includes('99,102,241') || val.includes('8,145,178'))) obj[key] = palette.tooltipBorder;
+    else if (key === 'grid' && val && typeof val === 'object') {
+      val.color = val.drawBorder === false ? palette.gridSoft : palette.grid;
+      recolorChartOptions(val, palette);
+    } else {
+      recolorChartOptions(val, palette);
+    }
+  });
+}
+
+function recolorExistingCharts() {
+  if (!window.Chart || !Chart.instances) return;
+  const palette = chartPalette();
+  Object.values(Chart.instances).forEach(chart => {
+    if (!chart || !chart.options) return;
+    recolorChartOptions(chart.options, palette);
+    chart.update('none');
+  });
+}
+
+function updateThemeToggle() {
+  const light = isLightTheme();
+  const icon = document.getElementById('themeIcon');
+  const text = document.getElementById('themeText');
+  const btn = document.getElementById('themeToggle');
+  if (icon) icon.className = light ? 'fa fa-moon' : 'fa fa-sun';
+  if (text) text.textContent = light ? 'Dark' : 'Daylight';
+  if (btn) btn.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to daylight mode');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', light ? '#f4faf9' : '#0a0e1a');
+}
+
+function toggleTheme() {
+  const nextLight = !isLightTheme();
+  document.documentElement.classList.toggle('theme-light', nextLight);
+  try { localStorage.setItem('camanava-theme', nextLight ? 'light' : 'dark'); } catch (err) {}
+  updateThemeToggle();
+  recolorExistingCharts();
+}
+
+async function apiJson(url) {
+  const res = await fetch(url);
+  const text = await res.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (err) {
+    throw new Error('Server returned an unreadable response.');
+  }
+  if (!res.ok || !json.success) throw new Error(json.error || 'Request failed.');
+  return json;
+}
+
 async function loadFilters() {
   setSyncing(true);
   try {
-    const res = await fetch('/api/filters');
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiJson('/api/filters');
     allFilters = json;
     const areaSel = document.getElementById('areaFilter');
     areaSel.innerHTML = '<option value="ALL">All Areas</option>';
@@ -2805,10 +3026,11 @@ async function loadFilters() {
     populateStores(json.stores);
     document.getElementById('dateFilter').value = today();
     await applyFilters();
+    recolorExistingCharts();
   } catch(e) {
     setStatus('error', ' Error');
     console.error(e);
-    showTableError('Failed to load. Check server and sheet permissions.');
+    showTableError('Failed to load: ' + e.message);
   } finally {
     setSyncing(false);
     hideOverlay();
@@ -2830,9 +3052,8 @@ async function onAreaChange() {
   if (area === 'ALL') populateStores(allFilters.stores);
   else {
     try {
-      const res = await fetch(\`/api/filters?area=\${encodeURIComponent(area)}\`);
-      const json = await res.json();
-      if (json.success) populateStores(json.stores);
+      const json = await apiJson(\`/api/filters?area=\${encodeURIComponent(area)}\`);
+      populateStores(json.stores);
     } catch(e){}
   }
   document.getElementById('storeFilter').value = 'ALL';
@@ -2848,9 +3069,7 @@ async function applyFilters() {
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
   try {
-    const res = await fetch('/api/sales?' + params);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiJson('/api/sales?' + params);
     const rows = json.rows || [];
     document.getElementById('recordsCount').innerHTML = \`<span>\${rows.length}</span> store\${rows.length!==1?'s':''} · <span>\${json.count}</span> row\${json.count!==1?'s':''}\`;
     const dateLabel = date ? new Date(date + 'T00:00:00').toLocaleDateString('en-PH', { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : 'All dates';
@@ -5700,6 +5919,7 @@ function showTableError(msg) {
   document.getElementById('tableBody').innerHTML = \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${msg}</p></td></tr>\`;
 }
 
+updateThemeToggle();
 loadFilters();
 </script>
 </body>

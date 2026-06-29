@@ -51,8 +51,9 @@ function loadUserAccounts() {
     const areas = Array.isArray(u.areas) ? u.areas : (u.area ? [u.area] : []);
     return {
       username: String(u.username || '').trim(),
+      usernameKey: normalizeKey(u.username),
       name: String(u.name || u.username || '').trim(),
-      password: u.password,
+      password: typeof u.password === 'string' ? u.password.trim() : u.password,
       passwordHash: u.passwordHash,
       areas: areas.map(a => String(a || '').trim()).filter(Boolean),
     };
@@ -67,7 +68,7 @@ function hashPassword(password) {
 
 function verifyPassword(user, password) {
   if (user.passwordHash) return hashPassword(password) === String(user.passwordHash).toLowerCase();
-  return String(user.password) === String(password);
+  return String(user.password) === String(password).trim();
 }
 
 function signSession(payload) {
@@ -91,7 +92,7 @@ function getRequestUser(req) {
   const token = parseCookies(req)[SESSION_COOKIE];
   const session = verifySession(token);
   if (!session || !session.username) return null;
-  const user = USER_ACCOUNTS.find(u => u.username === session.username);
+  const user = USER_ACCOUNTS.find(u => u.username === session.username || u.usernameKey === normalizeKey(session.username));
   if (!user) return null;
   return { username: user.username, name: user.name, areas: user.areas };
 }
@@ -163,7 +164,18 @@ const LOGIN_HTML = `<!DOCTYPE html>
     <div class="error" id="error">Invalid username or password.</div>
   </form>
   <script>
-    if (new URLSearchParams(location.search).get('error')) document.getElementById('error').style.display = 'block';
+    const err = new URLSearchParams(location.search).get('error');
+    if (err) {
+      const messages = {
+        no_users: 'No users are loaded. Check USER_ACCOUNTS_JSON and redeploy.',
+        no_user: 'Username was not found in USER_ACCOUNTS_JSON.',
+        bad_password: 'Password did not match this username.',
+        config: 'Login configuration error. Check Railway logs.',
+      };
+      const el = document.getElementById('error');
+      el.textContent = messages[err] || 'Invalid username or password.';
+      el.style.display = 'block';
+    }
   </script>
 </body>
 </html>`;
@@ -513,14 +525,16 @@ app.post('/login', (req, res) => {
   try {
     USER_ACCOUNTS = loadUserAccounts();
     const username = String(req.body.username || '').trim();
-    const password = String(req.body.password || '');
-    const user = USER_ACCOUNTS.find(u => u.username === username);
-    if (!user || !verifyPassword(user, password)) return res.redirect('/?error=1');
+    const password = String(req.body.password || '').trim();
+    if (!USER_ACCOUNTS.length) return res.redirect('/?error=no_users');
+    const user = USER_ACCOUNTS.find(u => u.usernameKey === normalizeKey(username));
+    if (!user) return res.redirect('/?error=no_user');
+    if (!verifyPassword(user, password)) return res.redirect('/?error=bad_password');
     setSessionCookie(res, user);
     res.redirect('/');
   } catch (err) {
     console.error('Login error:', err.message);
-    res.redirect('/?error=1');
+    res.redirect('/?error=config');
   }
 });
 

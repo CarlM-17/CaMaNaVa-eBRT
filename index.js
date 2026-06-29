@@ -2164,7 +2164,6 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
             <tr>
               <th class="sortable" data-sort-key="storeId" data-sort-type="num" onclick="sortMSummary('storeId','num')">Store ID <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortMSummary('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortMSummary('area','string')">Area <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="sales" data-sort-type="num" style="text-align:right" onclick="sortMSummary('sales','num')">Sales <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="salesLY" data-sort-type="num" style="text-align:right" onclick="sortMSummary('salesLY','num')">Sales LY <span class="sort-icon">⇅</span></th>
               <th class="sortable" data-sort-key="diffPct" data-sort-type="num" style="text-align:center" onclick="sortMSummary('diffPct','num')">Diff % <span class="sort-icon">⇅</span></th>
@@ -2172,7 +2171,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
             </tr>
           </thead>
           <tbody id="mSummaryBody">
-            <tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
@@ -3474,7 +3473,7 @@ async function applyMonthlyFilters() {
   } catch(e) {
     console.error(e);
     document.getElementById('mSummaryBody').innerHTML =
-      \`<tr><td colspan="7" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+      \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
   }
 }
 
@@ -3518,7 +3517,7 @@ function renderMKPIs(rows) {
 function renderMSummary(rows) {
   const tbody = document.getElementById('mSummaryBody');
   if (!rows.length) {
-    tbody.innerHTML = \`<tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No data for selected month</p></td></tr>\`;
+    tbody.innerHTML = \`<tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No data for selected month</p></td></tr>\`;
     return;
   }
 
@@ -3529,7 +3528,6 @@ function renderMSummary(rows) {
 
   let html = rows.map(r => {
     const pctCls = r.diffPct > 0.05 ? 'up' : r.diffPct < -0.05 ? 'down' : 'flat';
-    const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
     const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
     const diffColor = r.diffVal >= 0 ? '#34d399' : '#fb7185';
     const arrow = r.diffPct > 0.05 ? '↑' : r.diffPct < -0.05 ? '↓' : '—';
@@ -3544,7 +3542,6 @@ function renderMSummary(rows) {
           </div>
         </div>
       </td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${r.area || '—'}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(r.sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(r.salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctStr}</span></td>
@@ -3555,7 +3552,7 @@ function renderMSummary(rows) {
   const totPctCls = totPct > 0.05 ? 'up' : totPct < -0.05 ? 'down' : 'flat';
   const totArrow = totPct > 0.05 ? '↑' : totPct < -0.05 ? '↓' : '—';
   html += \`<tr class="summary-row">
-    <td colspan="3" style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--indigo2)">TOTAL · \${rows.length} STORES</td>
+    <td colspan="2" style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--indigo2)">TOTAL · \${rows.length} STORES</td>
     <td style="text-align:right"><span class="num">\${fmtFull(totSales)}</span></td>
     <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(totLY)}</span></td>
     <td style="text-align:center"><span class="pill \${totPctCls}">\${totArrow} \${Math.abs(totPct).toFixed(2)}%</span></td>

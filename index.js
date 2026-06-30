@@ -2915,8 +2915,8 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
         <table>
           <thead>
             <tr>
-              <th>Store Name</th>
               <th>Date</th>
+              <th>Store Name</th>
               <th>Issue Description</th>
               <th>Impact</th>
               <th>Status</th>
@@ -5803,13 +5803,13 @@ function renderHighPriorityNotDoneTable(rows) {
     const iColor = impactColor(r.impactLevel);
     const stCls = issueStatusClass(r.status);
     return '<tr>' +
+      '<td><span class="timestamp-cell">' + (escHtml(r.date) || '—') + '</span></td>' +
       '<td><div class="store-cell"><div class="store-info">' +
         '<div class="store-name" style="font-size:13.5px">' + (escHtml(r.storeName) || '—') + '</div>' +
         '<div class="store-id">' + escHtml(r.storeId ? '#'+r.storeId : r.area || '') + '</div>' +
       '</div></div></td>' +
-      '<td><span class="timestamp-cell">' + (escHtml(r.date) || '—') + '</span></td>' +
       '<td><div class="notes-cell">' + (escHtml(r.issueDescription) || '—') + '</div></td>' +
-      '<td style="text-align:center"><span class="status-pill" style="background:' + iColor + '22;border:1px solid ' + iColor + '66;color:' + iColor + '">' + (escHtml(r.impactLevel) || '—') + '</span></td>' +
+      '<td style="text-align:left"><span class="status-pill" style="background:' + iColor + '22;border:1px solid ' + iColor + '66;color:' + iColor + '">' + (escHtml(r.impactLevel) || '—') + '</span></td>' +
       '<td style="text-align:center"><span class="status-pill ' + stCls + '">' + (escHtml(r.status) || '—') + '</span></td>' +
       '<td><div class="remarks-cell">' + (escHtml(r.remarks) || '—') + '</div></td>' +
       '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '—') + '</span></td>' +
@@ -5859,8 +5859,8 @@ function writeIssueExcelFile(rows, sheetName, filename, columns) {
 
 function exportHighPriorityNotDoneToExcel() {
   const rows = highPriorityNotDoneRows(iState.rows).map(r => ({
-    'Store Name': r.storeName || '',
     'Date': r.date || '',
+    'Store Name': r.storeName || '',
     'Issue Description': r.issueDescription || '',
     'Impact': r.impactLevel || '',
     'Status': r.status || '',
@@ -5871,7 +5871,7 @@ function exportHighPriorityNotDoneToExcel() {
     rows,
     'High Priority Not Done',
     'CaMaNaVa_High_Priority_Not_Done_' + issueExportDateTag() + '.xlsx',
-    [24, 14, 60, 14, 18, 40, 22]
+    [14, 24, 60, 14, 18, 40, 22]
   );
 }
 
@@ -6175,14 +6175,12 @@ button{width:100%;margin-top:22px;border:0;border-radius:11px;padding:13px 14px;
         <div class="sub">Daily Sales Report</div>
       </div>
     </div>
-    <p>Sign in using the username, password, level, and area configured in the Google Sheet <b>user</b> tab.</p>
     <label for="username">Username</label>
     <input id="username" name="username" autocomplete="username" required autofocus/>
     <label for="password">Password</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required/>
     <button type="submit"><i class="fa fa-right-to-bracket"></i> Log in</button>
     <div class="error" id="error">Invalid username or password.</div>
-    <div class="hint">Admin level can access all areas. User level is limited to column E area.</div>
   </form>
   <script>
     const err = new URLSearchParams(location.search).get('error');

@@ -1295,6 +1295,47 @@ select,input[type=date]{
 select{padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236366f1'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
 select.multi-select{min-width:150px;min-height:92px;padding-right:14px;background-image:none}
 select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
+.tick-dropdown{position:relative;min-width:170px}
+.tick-trigger{
+  width:100%;min-width:170px;
+  background:rgba(15,20,35,0.7);
+  border:1px solid var(--border-strong);
+  color:var(--text-1);
+  padding:9px 34px 9px 14px;border-radius:10px;
+  font-size:13px;font-family:'Inter',sans-serif;font-weight:500;
+  cursor:pointer;outline:none;transition:all .2s;
+  text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  position:relative;
+}
+.tick-trigger::after{
+  content:'';position:absolute;right:13px;top:50%;transform:translateY(-50%);
+  border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--indigo2);
+}
+.tick-trigger:hover,.tick-dropdown.open .tick-trigger{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
+.tick-menu{
+  display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:160;
+  width:220px;max-height:340px;overflow:auto;
+  background:rgba(15,20,35,0.98);
+  border:1px solid var(--border-strong);
+  border-radius:12px;padding:10px;
+  box-shadow:0 18px 40px -18px rgba(0,0,0,0.65);
+}
+.tick-dropdown.open .tick-menu{display:block}
+.tick-actions{display:flex;gap:7px;margin-bottom:9px}
+.tick-action{
+  border:0;border-radius:7px;padding:6px 10px;
+  background:rgba(16,185,129,0.18);color:var(--emerald2);
+  font-size:11.5px;font-weight:700;cursor:pointer;
+}
+.tick-action.clear{background:rgba(148,163,200,0.12);color:var(--text-2)}
+.tick-option{
+  display:flex;align-items:center;gap:9px;
+  padding:7px 8px;border-radius:7px;
+  color:var(--text-1);font-size:12.5px;font-weight:700;
+  letter-spacing:.02em;cursor:pointer;text-transform:uppercase;
+}
+.tick-option:hover{background:rgba(99,102,241,0.08)}
+.tick-option input{width:14px;height:14px;accent-color:var(--emerald);flex:0 0 auto}
 .check-filter{
   min-width:150px;max-height:116px;overflow:auto;
   background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);
@@ -1308,14 +1349,21 @@ select:focus,input[type=date]:focus{border-color:var(--indigo);box-shadow:0 0 0 
 input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6) sepia(1) saturate(5) hue-rotate(210deg);cursor:pointer;opacity:0.8}
 html.theme-light select,
 html.theme-light input[type=date],
+html.theme-light .tick-trigger,
 html.theme-light .check-filter{
   background:rgba(255,255,255,0.94);
   color:var(--text-1);
 }
 html.theme-light select:hover,
 html.theme-light input[type=date]:hover,
+html.theme-light .tick-trigger:hover,
+html.theme-light .tick-dropdown.open .tick-trigger,
 html.theme-light .check-filter:hover{
   background:rgba(235,249,247,0.98);
+}
+html.theme-light .tick-menu{
+  background:rgba(255,255,255,0.98);
+  box-shadow:0 18px 40px -24px rgba(15,93,117,0.45);
 }
 html.theme-light input[type=date]::-webkit-calendar-picker-indicator{filter:none;opacity:.72}
 .divider{width:1px;height:24px;background:linear-gradient(180deg, transparent, var(--border-strong), transparent);margin:0 4px}
@@ -2265,7 +2313,10 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     <div class="controls">
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-calendar"></i> Month</span>
-        <select id="mMonthFilter" class="multi-select" multiple size="4" onchange="onMMonthChange()"></select>
+        <div class="tick-dropdown" id="mMonthDropdown">
+          <button class="tick-trigger" id="mMonthTrigger" type="button" onclick="toggleMMonthDropdown()">All Months</button>
+          <div class="tick-menu" id="mMonthMenu"></div>
+        </div>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group">
@@ -3565,21 +3616,7 @@ async function initMonthlyTab() {
 
     mMonthFilters.months = json.months || [];
 
-    // Populate month dropdown
-    const mSel = document.getElementById('mMonthFilter');
-    mSel.innerHTML = '<option value="ALL">All Months</option>';
-    mMonthFilters.months.forEach(m => {
-      const o = document.createElement('option');
-      o.value = m.value;
-      o.textContent = m.label;
-      mSel.appendChild(o);
-    });
-
-    // Default to the latest month
-    if (mMonthFilters.months.length) {
-      const latestMonth = mMonthFilters.months[mMonthFilters.months.length - 1].value;
-      Array.from(mSel.options).forEach(o => { o.selected = o.value === latestMonth; });
-    }
+    renderMMonthDropdown();
 
     // Populate area dropdown (reuse master list from daily tab)
     const aSel = document.getElementById('mAreaFilter');
@@ -3608,11 +3645,7 @@ function populateMStores(stores) {
 }
 
 function getSelectedMMonths() {
-  const sel = document.getElementById('mMonthFilter');
-  if (!sel) return [];
-  const values = Array.from(sel.selectedOptions).map(o => o.value).filter(Boolean);
-  if (!values.length || values.includes('ALL')) return [];
-  return values;
+  return Array.from(document.querySelectorAll('#mMonthMenu input[data-month]:checked')).map(input => input.value);
 }
 
 function monthlySelectionLabel(months) {
@@ -3622,12 +3655,46 @@ function monthlySelectionLabel(months) {
   return first + ' +' + (months.length - 1) + ' more';
 }
 
+function updateMMonthTrigger() {
+  const trigger = document.getElementById('mMonthTrigger');
+  if (trigger) trigger.textContent = monthlySelectionLabel(getSelectedMMonths());
+}
+
+function renderMMonthDropdown() {
+  const menu = document.getElementById('mMonthMenu');
+  if (!menu) return;
+  const latestMonth = mMonthFilters.months.length ? mMonthFilters.months[mMonthFilters.months.length - 1].value : '';
+  menu.innerHTML =
+    '<div class="tick-actions">' +
+      '<button class="tick-action" type="button" onclick="selectAllMMonths()">Select All</button>' +
+      '<button class="tick-action clear" type="button" onclick="clearMMonths()">Clear</button>' +
+    '</div>' +
+    mMonthFilters.months.map(m =>
+      '<label class="tick-option"><input type="checkbox" data-month value="' + escHtml(m.value) + '"' + (m.value === latestMonth ? ' checked' : '') + '> ' + escHtml(m.label) + '</label>'
+    ).join('');
+  menu.querySelectorAll('input[data-month]').forEach(input => {
+    input.addEventListener('change', onMMonthChange);
+  });
+  updateMMonthTrigger();
+}
+
+function toggleMMonthDropdown() {
+  const dd = document.getElementById('mMonthDropdown');
+  if (dd) dd.classList.toggle('open');
+}
+
+function selectAllMMonths() {
+  document.querySelectorAll('#mMonthMenu input[data-month]').forEach(input => { input.checked = true; });
+  onMMonthChange();
+}
+
+function clearMMonths() {
+  document.querySelectorAll('#mMonthMenu input[data-month]').forEach(input => { input.checked = false; });
+  onMMonthChange();
+}
+
 function onMMonthChange() {
-  const sel = document.getElementById('mMonthFilter');
-  const selected = Array.from(sel.selectedOptions).map(o => o.value);
-  if (selected.includes('ALL')) {
-    Array.from(sel.options).forEach(o => { o.selected = o.value === 'ALL'; });
-  }
+  updateMMonthTrigger();
   applyMonthlyFilters();
 }
 
@@ -6153,6 +6220,10 @@ function showTableError(msg) {
 
 updateThemeToggle();
 loadFilters();
+document.addEventListener('click', e => {
+  const dd = document.getElementById('mMonthDropdown');
+  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+});
 </script>
 </body>
 </html>

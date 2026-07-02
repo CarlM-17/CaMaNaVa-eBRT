@@ -630,9 +630,10 @@ app.get('/api/monthly', async (req, res) => {
     let data = await getSalesData(sheets);
     data = scopeRowsByArea(data, req.user);
     const { month, area, store, sign } = req.query;
+    const monthSet = parseMultiFilterParam(month);
 
     let filtered = data;
-    if (month) filtered = filtered.filter(r => monthKey(r.date) === month);
+    if (monthSet.size) filtered = filtered.filter(r => monthSet.has(normalizeKey(monthKey(r.date))));
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
@@ -2264,7 +2265,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     <div class="controls">
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-calendar"></i> Month</span>
-        <select id="mMonthFilter" onchange="applyMonthlyFilters()"></select>
+        <select id="mMonthFilter" class="multi-select" multiple size="4" onchange="onMMonthChange()"></select>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group">
@@ -3576,7 +3577,8 @@ async function initMonthlyTab() {
 
     // Default to the latest month
     if (mMonthFilters.months.length) {
-      mSel.value = mMonthFilters.months[mMonthFilters.months.length - 1].value;
+      const latestMonth = mMonthFilters.months[mMonthFilters.months.length - 1].value;
+      Array.from(mSel.options).forEach(o => { o.selected = o.value === latestMonth; });
     }
 
     // Populate area dropdown (reuse master list from daily tab)
@@ -3605,6 +3607,30 @@ function populateMStores(stores) {
   });
 }
 
+function getSelectedMMonths() {
+  const sel = document.getElementById('mMonthFilter');
+  if (!sel) return [];
+  const values = Array.from(sel.selectedOptions).map(o => o.value).filter(Boolean);
+  if (!values.length || values.includes('ALL')) return [];
+  return values;
+}
+
+function monthlySelectionLabel(months) {
+  if (!months.length) return 'All Months';
+  if (months.length === 1) return (mMonthFilters.months.find(m => m.value === months[0]) || {}).label || months[0];
+  const first = (mMonthFilters.months.find(m => m.value === months[0]) || {}).label || months[0];
+  return first + ' +' + (months.length - 1) + ' more';
+}
+
+function onMMonthChange() {
+  const sel = document.getElementById('mMonthFilter');
+  const selected = Array.from(sel.selectedOptions).map(o => o.value);
+  if (selected.includes('ALL')) {
+    Array.from(sel.options).forEach(o => { o.selected = o.value === 'ALL'; });
+  }
+  applyMonthlyFilters();
+}
+
 async function onMAreaChange() {
   const area = document.getElementById('mAreaFilter').value;
   if (area === 'ALL') populateMStores(allFilters.stores);
@@ -3628,14 +3654,12 @@ function setSignFilter(sign) {
 }
 
 async function applyMonthlyFilters() {
-  const month = document.getElementById('mMonthFilter').value;
+  const months = getSelectedMMonths();
   const area  = document.getElementById('mAreaFilter').value;
   const store = document.getElementById('mStoreFilter').value;
 
-  if (!month) return;
-
   const params = new URLSearchParams();
-  if (month !== 'ALL') params.set('month', month);
+  if (months.length) params.set('month', months.join(','));
   if (area !== 'ALL') params.set('area', area);
   if (store !== 'ALL') params.set('store', store);
   if (mSignFilter !== 'ALL') params.set('sign', mSignFilter);
@@ -3654,7 +3678,7 @@ async function applyMonthlyFilters() {
     document.getElementById('mRecordsCount').innerHTML =
       \`<span>\${summary.length}</span> store\${summary.length!==1?'s':''} · <span>\${detail.length}</span> detail row\${detail.length!==1?'s':''}\`;
 
-    const monthLabel = month === 'ALL' ? 'All Months' : ((mMonthFilters.months.find(m => m.value === month) || {}).label || month);
+    const monthLabel = monthlySelectionLabel(months);
     document.getElementById('mTableDate').textContent = monthLabel;
 
     renderMKPIs(summary);
@@ -3875,10 +3899,10 @@ function exportDetailToExcel() {
     return;
   }
 
-  const month = document.getElementById('mMonthFilter').value;
+  const months = getSelectedMMonths();
   const area  = document.getElementById('mAreaFilter').value;
   const store = document.getElementById('mStoreFilter').value;
-  const monthLabel = (mMonthFilters.months.find(m => m.value === month) || {}).label || month;
+  const monthLabel = monthlySelectionLabel(months);
 
   // Prepare data rows
   const data = mDetailRowsCache.map(r => ({
@@ -3937,7 +3961,7 @@ function exportDetailToExcel() {
   XLSX.utils.book_append_sheet(wb, ws, 'Detail Report');
 
   // Filename
-  const safeMonth = monthLabel.replace(/[^a-z0-9]/gi, '_');
+  const safeMonth = (months.length > 1 ? months.length + '_Months' : monthLabel).replace(/[^a-z0-9]/gi, '_');
   const tag = mSignFilter === 'POS' ? '_Positive' : mSignFilter === 'NEG' ? '_Negative' : '';
   const areaTag = area !== 'ALL' ? '_' + area.replace(/[^a-z0-9]/gi, '_') : '';
   const storeTag = store !== 'ALL' ? '_' + store.replace(/[^a-z0-9]/gi, '_') : '';

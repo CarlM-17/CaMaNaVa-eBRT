@@ -1275,6 +1275,7 @@ html.theme-light .logo-text{background:linear-gradient(135deg,#0b2534 0%,#0f766e
   border:1px solid var(--border-soft);
   border-radius:16px;padding:16px 22px;
   box-shadow:0 8px 32px -12px rgba(0,0,0,0.4);
+  position:relative;z-index:20;
 }
 .ctrl-group{display:flex;align-items:center;gap:10px}
 .ctrl-label{
@@ -1295,7 +1296,7 @@ select,input[type=date]{
 select{padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236366f1'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
 select.multi-select{min-width:150px;min-height:92px;padding-right:14px;background-image:none}
 select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
-.tick-dropdown{position:relative;min-width:170px}
+.tick-dropdown{position:relative;min-width:170px;z-index:200}
 .tick-trigger{
   width:100%;min-width:170px;
   background:rgba(15,20,35,0.7);
@@ -1313,7 +1314,7 @@ select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
 }
 .tick-trigger:hover,.tick-dropdown.open .tick-trigger{border-color:var(--indigo);background:rgba(99,102,241,0.05)}
 .tick-menu{
-  display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:160;
+  display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:9999;
   width:220px;max-height:340px;overflow:auto;
   background:rgba(15,20,35,0.98);
   border:1px solid var(--border-strong);
@@ -1321,6 +1322,8 @@ select.multi-select option{padding:5px 8px;border-radius:6px;margin:1px 0}
   box-shadow:0 18px 40px -18px rgba(0,0,0,0.65);
 }
 .tick-dropdown.open .tick-menu{display:block}
+.controls:has(.tick-dropdown.open){margin-bottom:260px}
+.controls.dropdown-open{margin-bottom:260px}
 .tick-actions{display:flex;gap:7px;margin-bottom:9px}
 .tick-action{
   border:0;border-radius:7px;padding:6px 10px;
@@ -3680,7 +3683,10 @@ function renderMMonthDropdown() {
 
 function toggleMMonthDropdown() {
   const dd = document.getElementById('mMonthDropdown');
-  if (dd) dd.classList.toggle('open');
+  if (!dd) return;
+  const open = dd.classList.toggle('open');
+  const controls = dd.closest('.controls');
+  if (controls) controls.classList.toggle('dropdown-open', open);
 }
 
 function selectAllMMonths() {
@@ -6222,7 +6228,11 @@ updateThemeToggle();
 loadFilters();
 document.addEventListener('click', e => {
   const dd = document.getElementById('mMonthDropdown');
-  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+  if (dd && !dd.contains(e.target)) {
+    dd.classList.remove('open');
+    const controls = dd.closest('.controls');
+    if (controls) controls.classList.remove('dropdown-open');
+  }
 });
 </script>
 </body>

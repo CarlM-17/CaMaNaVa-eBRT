@@ -195,6 +195,40 @@ function monthLabel(key) {
   return monthNames[parseInt(m)-1] + ' ' + y;
 }
 
+function cleanMonthText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/Â/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\uFFFD/g, '')
+    .replace(/[^\S\r\n]+/g, ' ')
+    .trim();
+}
+
+function categoryMonthKey(value) {
+  const clean = cleanMonthText(value);
+  if (!clean) return '';
+  const lower = clean.toLowerCase();
+  const direct = lower.match(/\b(20\d{2})[-/ ](0?[1-9]|1[0-2])\b/);
+  if (direct) return direct[1] + '-' + String(parseInt(direct[2], 10)).padStart(2, '0');
+
+  const monthMap = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+    may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
+    september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+  };
+  const yearMatch = lower.match(/\b(20\d{2})\b/);
+  const monthMatch = lower.match(/\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b/);
+  if (yearMatch && monthMatch) return yearMatch[1] + '-' + String(monthMap[monthMatch[1]]).padStart(2, '0');
+  return normalizeKey(clean);
+}
+
+function categoryMonthLabel(value, key) {
+  if (key && /^\d{4}-\d{2}$/.test(key)) return monthLabel(key);
+  const clean = cleanMonthText(value);
+  return clean.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
 let storeListCache = null, storeListCacheTime = 0;
 let salesCache = null, salesCacheTime = 0;
 let categoryCache = null, categoryCacheTime = 0;
@@ -259,7 +293,9 @@ async function getCategoryData(sheets) {
   const data = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || [];
-    const month     = (r[0] || '').trim();
+    const monthRaw  = cleanMonthText(r[0]);
+    const monthKeyValue = categoryMonthKey(monthRaw);
+    const month     = categoryMonthLabel(monthRaw, monthKeyValue);
     const area      = (r[1] || '').trim();
     const storeCode = (r[2] || '').trim();
     const storeName = (r[3] || '').trim();
@@ -268,12 +304,54 @@ async function getCategoryData(sheets) {
     const sales     = parseNum(r[6]);
     const salesLY   = parseNum(r[7]);
     const category  = (r[8] || '').trim();
-    if (!month && !storeCode && !category && !subDepName) continue;
-    data.push({ month, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category });
+    if (!monthRaw && !storeCode && !category && !subDepName) continue;
+    data.push({ month, monthRaw, monthKey: monthKeyValue, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category });
   }
   categoryCache = data;
   categoryCacheTime = now;
   return categoryCache;
+}
+
+function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
+  const selectedMonthKey = filters.monthKey || '';
+  const area = filters.area || 'ALL';
+  const store = filters.store || 'ALL';
+  const monthMap = new Map();
+  categoryRows.forEach(r => {
+    if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
+  });
+  const months = selectedMonthKey
+    ? [{ key: selectedMonthKey, label: monthMap.get(selectedMonthKey) || categoryMonthLabel(selectedMonthKey, selectedMonthKey) }]
+    : [...monthMap.entries()].map(([key, label]) => ({ key, label }));
+
+  let expectedStores = masterStores;
+  if (area && area !== 'ALL') expectedStores = expectedStores.filter(s => s.area === area);
+  if (store && store !== 'ALL') expectedStores = expectedStores.filter(s => s.storeName === store);
+
+  const rows = [];
+  months.forEach(m => {
+    const actual = new Set();
+    categoryRows
+      .filter(r => r.monthKey === m.key)
+      .forEach(r => {
+        if (r.storeCode) actual.add('id:' + normalizeKey(r.storeCode));
+        if (r.storeName) actual.add('name:' + normalizeKey(r.storeName));
+      });
+    expectedStores.forEach(s => {
+      const hasData = actual.has('id:' + normalizeKey(s.storeId)) || actual.has('name:' + normalizeKey(s.storeName));
+      if (!hasData) {
+        rows.push({
+          month: m.label,
+          monthKey: m.key,
+          area: s.area,
+          storeId: s.storeId,
+          storeName: s.storeName,
+          remarks: 'No Category Sales data found for this month',
+        });
+      }
+    });
+  });
+  return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
 }
 
 async function getStoreNotesData(sheets) {
@@ -693,9 +771,13 @@ app.get('/api/category-filters', async (req, res) => {
     let data = await getCategoryData(sheets);
     data = scopeRowsByArea(data, req.user);
     const { area: filterArea } = req.query;
-    const monthSet = [];
-    const seenMonths = new Set();
-    data.forEach(r => { if (r.month && !seenMonths.has(r.month)) { seenMonths.add(r.month); monthSet.push(r.month); } });
+    const monthMap = new Map();
+    data.forEach(r => {
+      if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
+    });
+    const months = [...monthMap.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.value.localeCompare(b.value));
     const categories = new Set();
     const areas = new Set();
     const stores = new Set();
@@ -706,7 +788,7 @@ app.get('/api/category-filters', async (req, res) => {
         if (!filterArea || filterArea === 'ALL' || r.area === filterArea) stores.add(r.storeName);
       }
     });
-    res.json({ success: true, months: monthSet, categories: [...categories].sort(), areas: [...areas].sort(), stores: [...stores].sort() });
+    res.json({ success: true, months, categories: [...categories].sort(), areas: [...areas].sort(), stores: [...stores].sort() });
   } catch (err) {
     console.error('Category-filters error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -717,11 +799,13 @@ app.get('/api/category', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    let data = await getCategoryData(sheets);
+    let [data, masterStores] = await Promise.all([getCategoryData(sheets), getMasterStoreList(sheets)]);
     data = scopeRowsByArea(data, req.user);
+    masterStores = scopeRowsByArea(masterStores, req.user);
     const { month, category, area, store, sign } = req.query;
+    const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
     let filtered = data;
-    if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
+    if (selectedMonthKey && month !== 'ALL') filtered = filtered.filter(r => r.monthKey === selectedMonthKey);
     if (category && category !== 'ALL') filtered = filtered.filter(r => r.category === category);
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
@@ -820,7 +904,9 @@ app.get('/api/category', async (req, res) => {
     if (sign === 'NEG') detail = detail.filter(r => r.diffVal < 0);
     detail.sort((a, b) => b.sales - a.sales);
 
-    res.json({ success: true, summary, detail, byArea, byStore, subDepsByCategory: subDepsByCategoryOut, movers });
+    const monitorRows = buildCategoryMonitorRows(data, masterStores, { monthKey: selectedMonthKey, area, store });
+
+    res.json({ success: true, summary, detail, byArea, byStore, subDepsByCategory: subDepsByCategoryOut, movers, monitorRows });
   } catch (err) {
     console.error('Category error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -834,8 +920,9 @@ app.get('/api/category-breakdown', async (req, res) => {
     let data = await getCategoryData(sheets);
     data = scopeRowsByArea(data, req.user);
     const { month, category, area, store, breakdownCategory, breakdownSubDep } = req.query;
+    const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
     let filtered = data;
-    if (month && month !== 'ALL') filtered = filtered.filter(r => r.month === month);
+    if (selectedMonthKey && month !== 'ALL') filtered = filtered.filter(r => r.monthKey === selectedMonthKey);
     if (category && category !== 'ALL') filtered = filtered.filter(r => r.category === category);
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
@@ -2706,6 +2793,30 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       </div>
     </div>
 
+    <!-- Category Data Monitoring -->
+    <div class="table-card" style="margin-top:24px">
+      <div class="table-header">
+        <div class="table-title"><i class="fa fa-clipboard-check"></i> Category Data Monitoring</div>
+        <div class="table-date" id="cMonitorInfo">â€”</div>
+      </div>
+      <div class="table-wrap" style="max-height:420px">
+        <table>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Area</th>
+              <th>Store ID</th>
+              <th>Store Name</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody id="cMonitorBody">
+            <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </div><!-- /tab-category -->
 
   <!--  STORE NOTES TAB  -->
@@ -3112,6 +3223,7 @@ let cSummaryRowsCache = [];
 let cDetailRowsCache = [];
 let cAreaRowsCache = [];
 let cStoreRowsCache = [];
+let cMonitorRowsCache = [];
 let cSummarySort = { key: 'sales', dir: 'desc', type: 'num' };
 let cDetailSort  = { key: 'sales', dir: 'desc', type: 'num' };
 let cAreaSort    = { key: 'sales', dir: 'desc', type: 'num' };
@@ -4347,8 +4459,8 @@ async function initCategoryTab() {
     mSel.innerHTML = '<option value="ALL">All Months</option>';
     json.months.forEach(m => {
       const o = document.createElement('option');
-      o.value = m;
-      o.textContent = m;
+      o.value = m.value || m;
+      o.textContent = m.label || m;
       mSel.appendChild(o);
     });
 
@@ -4398,6 +4510,12 @@ function populateCStores(stores) {
   });
 }
 
+function selectedOptionText(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel || !sel.selectedOptions || !sel.selectedOptions.length) return '';
+  return sel.selectedOptions[0].textContent || sel.value;
+}
+
 async function onCAreaChange() {
   const area = document.getElementById('cAreaFilter').value;
   if (area === 'ALL') {
@@ -4445,11 +4563,13 @@ async function applyCategoryFilters() {
     const byStore = json.byStore || [];
     const subDepsByCategory = json.subDepsByCategory || {};
     const movers = json.movers || { top: [], bottom: [] };
+    const monitorRows = json.monitorRows || [];
 
     cSummaryRowsCache = summary;
     cDetailRowsCache = detail;
     cAreaRowsCache = byArea;
     cStoreRowsCache = byStore;
+    cMonitorRowsCache = monitorRows;
     cSubDepsForBreakdown = subDepsByCategory;
 
     // Reset breakdown filters to ALL on main filter change
@@ -4462,7 +4582,7 @@ async function applyCategoryFilters() {
       \`<span>\${summary.length}</span> categor\${summary.length!==1?'ies':'y'} · <span>\${detail.length}</span> sub-dept\${detail.length!==1?'s':''}\`;
 
     const parts = [];
-    if (month !== 'ALL') parts.push(month);
+    if (month !== 'ALL') parts.push(selectedOptionText('cMonthFilter'));
     if (category !== 'ALL') parts.push(category);
     if (area !== 'ALL') parts.push(area);
     if (store !== 'ALL') parts.push(store);
@@ -4476,6 +4596,8 @@ async function applyCategoryFilters() {
     renderCCharts(summary, byArea, movers);
     renderCAreaTable(sortRows(byArea, cAreaSort));
     renderCStoreTable(sortRows(byStore, cStoreSort));
+    renderCMonitorTable(monitorRows);
+    document.getElementById('cMonitorInfo').textContent = monitorRows.length ? (monitorRows.length + ' store-month gap' + (monitorRows.length !== 1 ? 's' : '')) : 'Complete';
     updateSortHeaders('cAreaTableBody', cAreaSort);
     updateSortHeaders('cStoreTableBody', cStoreSort);
     document.getElementById('cAreaTableInfo').textContent = parts.length ? parts.join(' · ') : 'All data';
@@ -4852,7 +4974,7 @@ async function applyBreakdownFilters() {
     updateSortHeaders('cStoreTableBody', cStoreSort);
 
     const parts = [];
-    if (month !== 'ALL') parts.push(month);
+    if (month !== 'ALL') parts.push(selectedOptionText('cMonthFilter'));
     if (bCat !== 'ALL') parts.push(bCat);
     if (bSub !== 'ALL') parts.push(bSub);
     if (area !== 'ALL') parts.push(area);
@@ -4950,6 +5072,25 @@ function renderCStoreTable(rows) {
   tbody.innerHTML = html;
 }
 
+function renderCMonitorTable(rows) {
+  const tbody = document.getElementById('cMonitorBody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>All expected stores have Category Sales data</p><small>Based on the selected month, area, and store filters</small></td></tr>\`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    return \`<tr>
+      <td><span class="timestamp-cell">\${escHtml(r.month) || 'â€”'}</span></td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area) || 'â€”'}</span></td>
+      <td><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId) || 'â€”'}</span></td>
+      <td><div class="store-name">\${escHtml(r.storeName) || 'â€”'}</div></td>
+      <td><div class="remarks-cell">\${escHtml(r.remarks) || 'â€”'}</div></td>
+    </tr>\`;
+  }).join('');
+}
+
 function sortCArea(key, type) {
   if (cAreaSort.key === key) cAreaSort.dir = cAreaSort.dir === 'asc' ? 'desc' : 'asc';
   else cAreaSort = { key, dir: 'desc', type };
@@ -4988,6 +5129,7 @@ function exportCategoryToExcel() {
     return;
   }
   const month = document.getElementById('cMonthFilter').value;
+  const monthText = selectedOptionText('cMonthFilter');
   const category = document.getElementById('cCategoryFilter').value;
   const area = document.getElementById('cAreaFilter').value;
   const store = document.getElementById('cStoreFilter').value;
@@ -5023,7 +5165,7 @@ function exportCategoryToExcel() {
   XLSX.utils.book_append_sheet(wb, ws, 'Category Detail');
 
   const parts = ['CaMaNaVa_Category'];
-  if (month !== 'ALL') parts.push(month.replace(/[^a-z0-9]/gi,'_'));
+  if (month !== 'ALL') parts.push(monthText.replace(/[^a-z0-9]/gi,'_'));
   if (category !== 'ALL') parts.push(category.replace(/[^a-z0-9]/gi,'_'));
   if (area !== 'ALL') parts.push(area.replace(/[^a-z0-9]/gi,'_'));
   if (store !== 'ALL') parts.push(store.replace(/[^a-z0-9]/gi,'_'));

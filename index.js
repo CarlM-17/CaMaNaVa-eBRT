@@ -314,6 +314,10 @@ async function getCategoryData(sheets) {
 }
 
 function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
+  return buildCategoryMonitorStatus(categoryRows, masterStores, filters).gapRows;
+}
+
+function buildCategoryMonitorStatus(categoryRows, masterStores, filters = {}) {
   const selectedMonthKey = filters.monthKey || '';
   const area = filters.area || 'ALL';
   const store = filters.store || 'ALL';
@@ -321,6 +325,13 @@ function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
   categoryRows.forEach(r => {
     if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
   });
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const monitorYear = yesterday.getFullYear();
+  for (let m = 0; m <= yesterday.getMonth(); m++) {
+    const key = monitorYear + '-' + String(m + 1).padStart(2, '0');
+    if (!monthMap.has(key)) monthMap.set(key, monthLabel(key));
+  }
   const months = selectedMonthKey
     ? [{ key: selectedMonthKey, label: monthMap.get(selectedMonthKey) || categoryMonthLabel(selectedMonthKey, selectedMonthKey) }]
     : [...monthMap.entries()].map(([key, label]) => ({ key, label }));
@@ -329,7 +340,8 @@ function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
   if (area && area !== 'ALL') expectedStores = expectedStores.filter(s => s.area === area);
   if (store && store !== 'ALL') expectedStores = expectedStores.filter(s => s.storeName === store);
 
-  const rows = [];
+  const gapRows = [];
+  const completeRows = [];
   months.forEach(m => {
     const actual = new Set();
     categoryRows
@@ -341,7 +353,7 @@ function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
     expectedStores.forEach(s => {
       const hasData = actual.has('id:' + normalizeKey(s.storeId)) || actual.has('name:' + normalizeKey(s.storeName));
       if (!hasData) {
-        rows.push({
+        gapRows.push({
           month: m.label,
           monthKey: m.key,
           area: s.area,
@@ -349,10 +361,131 @@ function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
           storeName: s.storeName,
           remarks: 'No Category Sales data found for this month',
         });
+      } else {
+        completeRows.push({
+          month: m.label,
+          monthKey: m.key,
+          area: s.area,
+          storeId: s.storeId,
+          storeName: s.storeName,
+          remarks: 'Complete Category Sales data found for this month',
+        });
       }
     });
   });
-  return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
+  const sortMonitor = (a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || '');
+  return {
+    gapRows: gapRows.sort(sortMonitor),
+    completeRows: completeRows.sort(sortMonitor),
+  };
+}
+
+function formatISODateLocal(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return yyyy + '-' + mm + '-' + dd;
+}
+
+function daysInMonthUntil(year, monthIndex, endDate) {
+  const lastDay = monthIndex === endDate.getMonth() && year === endDate.getFullYear()
+    ? endDate.getDate()
+    : new Date(year, monthIndex + 1, 0).getDate();
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) days.push(year + '-' + String(monthIndex + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0'));
+  return days;
+}
+
+function buildDailySalesGapMonitor(salesRows, masterStores, filters = {}) {
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const year = yesterday.getFullYear();
+  const selectedMonth = filters.month || 'ALL';
+  const area = filters.area || 'ALL';
+  const store = filters.store || 'ALL';
+
+  let expectedStores = masterStores;
+  if (area && area !== 'ALL') expectedStores = expectedStores.filter(s => s.area === area);
+  if (store && store !== 'ALL') expectedStores = expectedStores.filter(s => s.storeName === store);
+
+  const reported = new Set();
+  salesRows.forEach(r => {
+    if (!r.date) return;
+    if (String(r.date).slice(0, 4) !== String(year)) return;
+    if (r.storeId) reported.add('id:' + normalizeKey(r.storeId) + '|' + r.date);
+    if (r.storeName) reported.add('name:' + normalizeKey(r.storeName) + '|' + r.date);
+  });
+
+  const months = [];
+  const lastMonth = yesterday.getMonth();
+  for (let m = 0; m <= lastMonth; m++) {
+    const key = year + '-' + String(m + 1).padStart(2, '0');
+    if (selectedMonth !== 'ALL' && selectedMonth !== key) continue;
+    months.push({ key, label: monthLabel(key), days: daysInMonthUntil(year, m, yesterday) });
+  }
+
+  const storeMonthRows = [];
+  months.forEach(m => {
+    expectedStores.forEach(s => {
+      const missingDates = m.days.filter(date =>
+        !reported.has('id:' + normalizeKey(s.storeId) + '|' + date) &&
+        !reported.has('name:' + normalizeKey(s.storeName) + '|' + date)
+      );
+      const expectedDays = m.days.length;
+      const gapDays = missingDates.length;
+      const reportedDays = expectedDays - gapDays;
+      const completionPct = expectedDays ? (reportedDays / expectedDays) * 100 : 0;
+      storeMonthRows.push({
+        month: m.label,
+        monthKey: m.key,
+        area: s.area,
+        storeId: s.storeId,
+        storeName: s.storeName,
+        expectedDays,
+        reportedDays,
+        gapDays,
+        completionPct: parseFloat(completionPct.toFixed(2)),
+        missingDates,
+        status: gapDays ? 'With Gap' : 'Complete',
+        remarks: gapDays ? (gapDays + ' day' + (gapDays !== 1 ? 's' : '') + ' missing') : 'Complete Daily Sales data',
+      });
+    });
+  });
+
+  const gapRows = storeMonthRows.filter(r => r.gapDays > 0).sort((a, b) => b.gapDays - a.gapDays || a.monthKey.localeCompare(b.monthKey) || (a.storeName || '').localeCompare(b.storeName || ''));
+  const completeRows = storeMonthRows.filter(r => r.gapDays === 0).sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
+  const monthly = months.map(m => {
+    const rows = storeMonthRows.filter(r => r.monthKey === m.key);
+    const expectedStoreDays = rows.reduce((sum, r) => sum + r.expectedDays, 0);
+    const gapDays = rows.reduce((sum, r) => sum + r.gapDays, 0);
+    const completeStores = rows.filter(r => r.gapDays === 0).length;
+    const storesWithGaps = rows.filter(r => r.gapDays > 0).length;
+    return {
+      month: m.label,
+      monthKey: m.key,
+      expectedStoreDays,
+      reportedStoreDays: expectedStoreDays - gapDays,
+      gapDays,
+      completeStores,
+      storesWithGaps,
+      completionPct: expectedStoreDays ? parseFloat((((expectedStoreDays - gapDays) / expectedStoreDays) * 100).toFixed(2)) : 0,
+    };
+  });
+  const totalExpectedStoreDays = monthly.reduce((sum, r) => sum + r.expectedStoreDays, 0);
+  const totalGapDays = monthly.reduce((sum, r) => sum + r.gapDays, 0);
+  const summary = {
+    year,
+    throughDate: formatISODateLocal(yesterday),
+    storeMonths: storeMonthRows.length,
+    gapStoreMonths: gapRows.length,
+    completeStoreMonths: completeRows.length,
+    totalExpectedStoreDays,
+    totalReportedStoreDays: totalExpectedStoreDays - totalGapDays,
+    totalGapDays,
+    completionPct: totalExpectedStoreDays ? parseFloat((((totalExpectedStoreDays - totalGapDays) / totalExpectedStoreDays) * 100).toFixed(2)) : 0,
+  };
+
+  return { summary, monthly, gapRows, completeRows };
 }
 
 async function getStoreNotesData(sheets) {
@@ -776,6 +909,13 @@ app.get('/api/category-filters', async (req, res) => {
     data.forEach(r => {
       if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
     });
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const monitorYear = yesterday.getFullYear();
+    for (let m = 0; m <= yesterday.getMonth(); m++) {
+      const key = monitorYear + '-' + String(m + 1).padStart(2, '0');
+      if (!monthMap.has(key)) monthMap.set(key, monthLabel(key));
+    }
     const months = [...monthMap.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.value.localeCompare(b.value));
@@ -924,11 +1064,35 @@ app.get('/api/data-gaps', async (req, res) => {
 
     const { month, area, store } = req.query;
     const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
-    const rows = buildCategoryMonitorRows(data, masterStores, { monthKey: selectedMonthKey, area, store });
+    const status = buildCategoryMonitorStatus(data, masterStores, { monthKey: selectedMonthKey, area, store });
 
-    res.json({ success: true, rows, count: rows.length });
+    res.json({
+      success: true,
+      rows: status.gapRows,
+      gapRows: status.gapRows,
+      completeRows: status.completeRows,
+      count: status.gapRows.length,
+      completeCount: status.completeRows.length,
+    });
   } catch (err) {
     console.error('Data-gaps error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/daily-sales-gaps', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    let [data, masterStores] = await Promise.all([getSalesData(sheets), getMasterStoreList(sheets)]);
+    data = scopeRowsByArea(data, req.user);
+    masterStores = scopeRowsByArea(masterStores, req.user);
+
+    const { month, area, store } = req.query;
+    const result = buildDailySalesGapMonitor(data, masterStores, { month, area, store });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Daily-sales-gaps error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -946,6 +1110,13 @@ app.get('/api/data-gap-filters', async (req, res) => {
     data.forEach(r => {
       if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
     });
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const monitorYear = yesterday.getFullYear();
+    for (let m = 0; m <= yesterday.getMonth(); m++) {
+      const key = monitorYear + '-' + String(m + 1).padStart(2, '0');
+      if (!monthMap.has(key)) monthMap.set(key, monthLabel(key));
+    }
     const months = [...monthMap.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.value.localeCompare(b.value));
@@ -2876,31 +3047,114 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       <div class="records-count" id="gRecordsCount">-</div>
     </div>
 
-    <div class="table-card">
-      <div class="table-header" style="gap:14px;flex-wrap:wrap">
-        <div class="table-title"><i class="fa fa-clipboard-check"></i> Category Data Monitoring</div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-          <button class="export-btn" onclick="exportGapsToExcel()">
-            <i class="fa fa-file-excel"></i> Export Excel
-          </button>
-          <div class="table-date" id="gMonitorInfo">-</div>
+    <div class="charts-grid">
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-triangle-exclamation"></i> Category Sales Gap</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <button class="export-btn" onclick="exportGapsToExcel('gap')">
+              <i class="fa fa-file-excel"></i> Export Excel
+            </button>
+            <div class="table-date" id="gMonitorInfo">-</div>
+          </div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th class="sortable" data-sort-key="monthKey" data-sort-type="string" onclick="sortGaps('monthKey','string')">Month <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortGaps('area','string')">Area <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="storeId" data-sort-type="num" style="text-align:center" onclick="sortGaps('storeId','num')">Store ID <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortGaps('storeName','string')">Store Name <span class="sort-icon">&harr;</span></th>
+                <th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="gMonitorBody">
+              <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
-      <div class="table-wrap" style="max-height:720px">
-        <table>
-          <thead>
-            <tr>
-              <th class="sortable" data-sort-key="monthKey" data-sort-type="string" onclick="sortGaps('monthKey','string')">Month <span class="sort-icon">&harr;</span></th>
-              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortGaps('area','string')">Area <span class="sort-icon">&harr;</span></th>
-              <th class="sortable" data-sort-key="storeId" data-sort-type="num" style="text-align:center" onclick="sortGaps('storeId','num')">Store ID <span class="sort-icon">&harr;</span></th>
-              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortGaps('storeName','string')">Store Name <span class="sort-icon">&harr;</span></th>
-              <th>Remarks</th>
-            </tr>
-          </thead>
-          <tbody id="gMonitorBody">
-            <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
-          </tbody>
-        </table>
+
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-circle-check"></i> Category Sales Complete</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <button class="export-btn" onclick="exportGapsToExcel('complete')">
+              <i class="fa fa-file-excel"></i> Export Excel
+            </button>
+            <div class="table-date" id="gCompleteInfo">-</div>
+          </div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th class="sortable" data-sort-key="monthKey" data-sort-type="string" onclick="sortGapsComplete('monthKey','string')">Month <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortGapsComplete('area','string')">Area <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="storeId" data-sort-type="num" style="text-align:center" onclick="sortGapsComplete('storeId','num')">Store ID <span class="sort-icon">&harr;</span></th>
+                <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortGapsComplete('storeName','string')">Store Name <span class="sort-icon">&harr;</span></th>
+                <th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="gCompleteBody">
+              <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:24px">
+      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-calendar-check"></i></div>Expected Store-Days</div><div class="kpi-value gradient-text" id="dgExpected">-</div><div class="kpi-sub">January to yesterday</div></div>
+      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-circle-check"></i></div>Reported Store-Days</div><div class="kpi-value gradient-text" id="dgReported">-</div><div class="kpi-sub">with Daily Sales data</div></div>
+      <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-triangle-exclamation"></i></div>Gap Days</div><div class="kpi-value" id="dgGapDays">-</div><div class="kpi-sub">missing store-days</div></div>
+      <div class="kpi k-pct"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-percent"></i></div>Completion</div><div class="kpi-value" id="dgCompletion">-</div><div class="kpi-sub">reported / expected</div></div>
+      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Store-Months</div><div class="kpi-value gradient-text" id="dgStoreMonths">-</div><div class="kpi-sub" id="dgStoreMonthsSub">gap vs complete</div></div>
+    </div>
+
+    <div class="chart-card" style="margin-top:24px">
+      <div class="chart-title">
+        <i class="fa fa-chart-column"></i> Daily Sales Gap
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em" id="dgChartInfo">January to yesterday</span>
+      </div>
+      <div style="position:relative;height:340px">
+        <canvas id="dailyGapChart"></canvas>
+      </div>
+    </div>
+
+    <div class="charts-grid" style="margin-top:24px">
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-triangle-exclamation"></i> Daily Sales Stores With Gap</div>
+          <div class="table-date" id="dgGapInfo">-</div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
+              </tr>
+            </thead>
+            <tbody id="dgGapBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-circle-check"></i> Daily Sales Complete Stores</div>
+          <div class="table-date" id="dgCompleteInfo">-</div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Completion</th><th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="dgCompleteBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -3319,8 +3573,10 @@ let cBreakdownData = []; // raw filtered data for breakdown filtering
 let cSubDepsForBreakdown = []; // list of sub-depts grouped by category
 
 // Data gaps monitoring state
-let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [] };
+let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
 let gSort = { key: 'monthKey', dir: 'desc', type: 'string' };
+let gCompleteSort = { key: 'monthKey', dir: 'desc', type: 'string' };
+let dailyGapChartInst = null;
 
 // Daily sort state
 let dailyRowsCache = [];
@@ -5191,8 +5447,8 @@ async function initGapsTab() {
     await applyGapsFilters();
   } catch(e) {
     console.error('Data gaps init error:', e);
-    document.getElementById('gMonitorBody').innerHTML =
-      \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+    const body = document.getElementById('gMonitorBody');
+    if (body) body.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
@@ -5232,66 +5488,171 @@ async function applyGapsFilters() {
   if (store !== 'ALL') params.set('store', store);
 
   try {
-    const res = await fetch('/api/data-gaps?' + params);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const [categoryRes, dailyRes] = await Promise.all([
+      fetch('/api/data-gaps?' + params),
+      fetch('/api/daily-sales-gaps?' + params)
+    ]);
+    const categoryJson = await categoryRes.json();
+    const dailyJson = await dailyRes.json();
+    if (!categoryJson.success) throw new Error(categoryJson.error);
+    if (!dailyJson.success) throw new Error(dailyJson.error);
 
-    gState.rows = json.rows || [];
-    renderGapsTable(sortRows(gState.rows, gSort));
+    gState.rows = categoryJson.gapRows || categoryJson.rows || [];
+    gState.completeRows = categoryJson.completeRows || [];
+    gState.daily = {
+      summary: dailyJson.summary || {},
+      monthly: dailyJson.monthly || [],
+      gapRows: dailyJson.gapRows || [],
+      completeRows: dailyJson.completeRows || []
+    };
+
+    renderGapsTable(sortRows(gState.rows, gSort), 'gMonitorBody', 'gap');
+    renderGapsTable(sortRows(gState.completeRows, gCompleteSort), 'gCompleteBody', 'complete');
     updateSortHeaders('gMonitorBody', gSort);
-
-    document.getElementById('gRecordsCount').innerHTML =
-      \`<span>\${gState.rows.length}</span> store-month gap\${gState.rows.length !== 1 ? 's' : ''}\`;
+    updateSortHeaders('gCompleteBody', gCompleteSort);
+    renderDailyGapSection();
 
     const parts = [];
     if (month !== 'ALL') parts.push(selectedOptionText('gMonthFilter'));
     if (area !== 'ALL') parts.push(area);
     if (store !== 'ALL') parts.push(store);
     const filterText = parts.length ? parts.join(' - ') : 'All months';
-    document.getElementById('gMonitorInfo').textContent = gState.rows.length
-      ? (gState.rows.length + ' store-month gap' + (gState.rows.length !== 1 ? 's' : '') + ' - ' + filterText)
-      : 'Complete - ' + filterText;
+
+    document.getElementById('gRecordsCount').innerHTML = '<span>' + gState.rows.length + '</span> category gap - <span>' + gState.completeRows.length + '</span> complete - <span>' + (gState.daily.summary.totalGapDays || 0) + '</span> daily gap days';
+    document.getElementById('gMonitorInfo').textContent = gState.rows.length ? (gState.rows.length + ' store-month gap' + (gState.rows.length !== 1 ? 's' : '') + ' - ' + filterText) : 'No category gaps - ' + filterText;
+    document.getElementById('gCompleteInfo').textContent = gState.completeRows.length + ' complete store-month' + (gState.completeRows.length !== 1 ? 's' : '') + ' - ' + filterText;
   } catch(e) {
     console.error(e);
-    document.getElementById('gMonitorBody').innerHTML =
-      \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+    document.getElementById('gMonitorBody').innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
-function renderGapsTable(rows) {
-  const tbody = document.getElementById('gMonitorBody');
+function renderGapsTable(rows, tbodyId, mode) {
+  const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>All expected stores have Category Sales data</p><small>Based on the selected month, area, and store filters</small></td></tr>\`;
+    const msg = mode === 'complete' ? 'No complete store-months found' : 'All expected stores have Category Sales data';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + msg + '</p><small>Based on the selected month, area, and store filters</small></td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
-    return \`<tr>
-      <td><span class="timestamp-cell">\${escHtml(r.month) || '-'}</span></td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area) || '-'}</span></td>
-      <td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId) || '-'}</span></td>
-      <td><div class="store-name">\${escHtml(r.storeName) || '-'}</div></td>
-      <td><div class="remarks-cell" style="text-align:left">\${escHtml(r.remarks) || '-'}</div></td>
-    </tr>\`;
+    return '<tr>' +
+      '<td><span class="timestamp-cell">' + (escHtml(r.month) || '-') + '</span></td>' +
+      '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + (escHtml(r.area) || '-') + '</span></td>' +
+      '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + (escHtml(r.storeId) || '-') + '</span></td>' +
+      '<td><div class="store-name">' + (escHtml(r.storeName) || '-') + '</div></td>' +
+      '<td><div class="remarks-cell" style="text-align:left">' + (escHtml(r.remarks) || '-') + '</div></td>' +
+    '</tr>';
   }).join('');
+}
+
+function renderDailyGapSection() {
+  const summary = gState.daily.summary || {};
+  document.getElementById('dgExpected').textContent = (summary.totalExpectedStoreDays || 0).toLocaleString('en-PH');
+  document.getElementById('dgReported').textContent = (summary.totalReportedStoreDays || 0).toLocaleString('en-PH');
+  document.getElementById('dgGapDays').textContent = (summary.totalGapDays || 0).toLocaleString('en-PH');
+  document.getElementById('dgCompletion').textContent = (summary.completionPct || 0).toFixed(2) + '%';
+  document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
+  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
+  document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
+  document.getElementById('dgGapInfo').textContent = (gState.daily.gapRows || []).length + ' store-months with gaps';
+  document.getElementById('dgCompleteInfo').textContent = (gState.daily.completeRows || []).length + ' complete store-months';
+  renderDailyGapChart(gState.daily.monthly || []);
+  renderDailyRows(gState.daily.gapRows || [], 'dgGapBody', true);
+  renderDailyRows(gState.daily.completeRows || [], 'dgCompleteBody', false);
+}
+
+function renderDailyRows(rows, tbodyId, isGap) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const colspan = 8;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + (isGap ? 'No Daily Sales gaps found' : 'No complete Daily Sales store-months found') + '</p></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const pct = (r.completionPct || 0).toFixed(2) + '%';
+    if (isGap) {
+      return '<tr>' +
+        '<td><span class="timestamp-cell">' + escHtml(r.month) + '</span></td>' +
+        '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area) + '</span></td>' +
+        '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + escHtml(r.storeId) + '</span></td>' +
+        '<td><div class="store-name">' + escHtml(r.storeName) + '</div></td>' +
+        '<td style="text-align:center"><span class="num">' + r.expectedDays + '</span></td>' +
+        '<td style="text-align:center"><span class="num">' + r.reportedDays + '</span></td>' +
+        '<td style="text-align:center"><span class="pill down">' + r.gapDays + '</span></td>' +
+        '<td style="text-align:center"><span class="pill ' + (r.completionPct >= 99.999 ? 'up' : 'down') + '">' + pct + '</span></td>' +
+      '</tr>';
+    }
+    return '<tr>' +
+      '<td><span class="timestamp-cell">' + escHtml(r.month) + '</span></td>' +
+      '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area) + '</span></td>' +
+      '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + escHtml(r.storeId) + '</span></td>' +
+      '<td><div class="store-name">' + escHtml(r.storeName) + '</div></td>' +
+      '<td style="text-align:center"><span class="num">' + r.expectedDays + '</span></td>' +
+      '<td style="text-align:center"><span class="num">' + r.reportedDays + '</span></td>' +
+      '<td style="text-align:center"><span class="pill up">' + pct + '</span></td>' +
+      '<td><div class="remarks-cell" style="text-align:left">' + escHtml(r.remarks) + '</div></td>' +
+    '</tr>';
+  }).join('');
+}
+
+function renderDailyGapChart(monthly) {
+  const canvas = document.getElementById('dailyGapChart');
+  if (!canvas) return;
+  if (dailyGapChartInst) dailyGapChartInst.destroy();
+  const palette = chartPalette();
+  dailyGapChartInst = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: monthly.map(r => r.month),
+      datasets: [
+        { label: 'Gap Days', data: monthly.map(r => r.gapDays), backgroundColor: '#f43f5e', borderRadius: 6, yAxisID: 'y' },
+        { label: 'Completion %', data: monthly.map(r => r.completionPct), type: 'line', borderColor: '#10b981', backgroundColor: '#10b981', tension: 0.35, pointRadius: 3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: { legend: { labels: { color: palette.muted, font: { family: "'Inter'", size: 11 } } } },
+      scales: {
+        x: { grid: { color: palette.gridSoft }, ticks: { color: palette.muted, font: { family: "'Inter'", size: 10.5, weight: '600' } } },
+        y: { beginAtZero: true, grid: { color: palette.grid }, ticks: { color: palette.muted, font: { family: "'JetBrains Mono'", size: 10.5 } }, title: { display: true, text: 'Gap Days', color: palette.muted } },
+        y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { color: palette.muted, callback: v => v + '%' }, title: { display: true, text: 'Completion %', color: palette.muted } }
+      }
+    }
+  });
 }
 
 function sortGaps(key, type) {
   if (gSort.key === key) gSort.dir = gSort.dir === 'asc' ? 'desc' : 'asc';
-  else gSort = { key, dir: key === 'month' ? 'desc' : 'asc', type };
+  else gSort = { key, dir: key === 'monthKey' ? 'desc' : 'asc', type };
   gSort.type = type;
-  renderGapsTable(sortRows(gState.rows, gSort));
+  renderGapsTable(sortRows(gState.rows, gSort), 'gMonitorBody', 'gap');
   updateSortHeaders('gMonitorBody', gSort);
 }
 
-function exportGapsToExcel() {
-  if (!gState.rows.length) {
+function sortGapsComplete(key, type) {
+  if (gCompleteSort.key === key) gCompleteSort.dir = gCompleteSort.dir === 'asc' ? 'desc' : 'asc';
+  else gCompleteSort = { key, dir: key === 'monthKey' ? 'desc' : 'asc', type };
+  gCompleteSort.type = type;
+  renderGapsTable(sortRows(gState.completeRows, gCompleteSort), 'gCompleteBody', 'complete');
+  updateSortHeaders('gCompleteBody', gCompleteSort);
+}
+
+function exportGapsToExcel(mode) {
+  const isComplete = mode === 'complete';
+  const rows = isComplete ? gState.completeRows : gState.rows;
+  const sortState = isComplete ? gCompleteSort : gSort;
+  if (!rows.length) {
     alert('No data to export with the current filters.');
     return;
   }
 
-  const data = sortRows(gState.rows, gSort).map(r => ({
+  const data = sortRows(rows, sortState).map(r => ({
     'Month': r.month || '',
     'Area': r.area || '',
     'Store ID': r.storeId || '',
@@ -5318,19 +5679,15 @@ function exportGapsToExcel() {
       for (let C = range.s.c; C <= range.e.c; C++) {
         const addr = XLSX.utils.encode_cell({ r: R, c: C });
         if (!ws[addr]) continue;
-        ws[addr].s = {
-          alignment: {
-            horizontal: C === 2 ? 'center' : 'left',
-            vertical: 'center',
-            wrapText: C === 4
-          }
-        };
+        ws[addr].s = { alignment: { horizontal: C === 2 ? 'center' : 'left', vertical: 'center', wrapText: C === 4 } };
       }
     }
   }
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Data Gaps');
-  XLSX.writeFile(wb, 'CaMaNaVa_Data_Gaps_' + issueExportDateTag() + '.xlsx');
+  const sheetName = isComplete ? 'Category Complete' : 'Category Gaps';
+  const fileTag = isComplete ? 'Category_Complete' : 'Category_Gaps';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, 'CaMaNaVa_' + fileTag + '_' + issueExportDateTag() + '.xlsx');
 }
 function sortCArea(key, type) {
   if (cAreaSort.key === key) cAreaSort.dir = cAreaSort.dir === 'asc' ? 'desc' : 'asc';

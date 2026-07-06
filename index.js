@@ -62,6 +62,10 @@ function normalizeKey(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function compactKey(value) {
+  return normalizeKey(value).replace(/[^a-z0-9]/g, '');
+}
+
 function parseAreaList(value) {
   return String(value || '')
     .split(/[,\n;|]+/)
@@ -219,7 +223,10 @@ function categoryMonthKey(value) {
   };
   const yearMatch = lower.match(/\b(20\d{2})\b/);
   const monthMatch = lower.match(/\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b/);
-  if (yearMatch && monthMatch) return yearMatch[1] + '-' + String(monthMap[monthMatch[1]]).padStart(2, '0');
+  if (monthMatch) {
+    const year = yearMatch ? yearMatch[1] : String(new Date().getFullYear());
+    return year + '-' + String(monthMap[monthMatch[1]]).padStart(2, '0');
+  }
   return normalizeKey(clean);
 }
 
@@ -348,10 +355,13 @@ function buildCategoryMonitorStatus(categoryRows, masterStores, filters = {}) {
       .filter(r => r.monthKey === m.key)
       .forEach(r => {
         if (r.storeCode) actual.add('id:' + normalizeKey(r.storeCode));
-        if (r.storeName) actual.add('name:' + normalizeKey(r.storeName));
+        if (r.storeName) {
+          actual.add('name:' + normalizeKey(r.storeName));
+          actual.add('cname:' + compactKey(r.storeName));
+        }
       });
     expectedStores.forEach(s => {
-      const hasData = actual.has('id:' + normalizeKey(s.storeId)) || actual.has('name:' + normalizeKey(s.storeName));
+      const hasData = actual.has('id:' + normalizeKey(s.storeId)) || actual.has('name:' + normalizeKey(s.storeName)) || actual.has('cname:' + compactKey(s.storeName));
       if (!hasData) {
         gapRows.push({
           month: m.label,
@@ -3090,7 +3100,6 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           <table>
             <thead>
               <tr>
-                <th class="sortable" data-sort-key="monthKey" data-sort-type="string" onclick="sortGapsComplete('monthKey','string')">Month <span class="sort-icon">&harr;</span></th>
                 <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortGapsComplete('area','string')">Area <span class="sort-icon">&harr;</span></th>
                 <th class="sortable" data-sort-key="storeId" data-sort-type="num" style="text-align:center" onclick="sortGapsComplete('storeId','num')">Store ID <span class="sort-icon">&harr;</span></th>
                 <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortGapsComplete('storeName','string')">Store Name <span class="sort-icon">&harr;</span></th>
@@ -3098,7 +3107,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
               </tr>
             </thead>
             <tbody id="gCompleteBody">
-              <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
             </tbody>
           </table>
         </div>
@@ -3575,7 +3584,7 @@ let cSubDepsForBreakdown = []; // list of sub-depts grouped by category
 // Data gaps monitoring state
 let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
 let gSort = { key: 'monthKey', dir: 'desc', type: 'string' };
-let gCompleteSort = { key: 'monthKey', dir: 'desc', type: 'string' };
+let gCompleteSort = { key: 'area', dir: 'asc', type: 'string' };
 let dailyGapChartInst = null;
 
 // Daily sort state
@@ -5507,7 +5516,7 @@ async function applyGapsFilters() {
     };
 
     renderGapsTable(sortRows(gState.rows, gSort), 'gMonitorBody', 'gap');
-    renderGapsTable(sortRows(gState.completeRows, gCompleteSort), 'gCompleteBody', 'complete');
+    renderGapsTable(sortRows(categoryCompleteStores(), gCompleteSort), 'gCompleteBody', 'complete');
     updateSortHeaders('gMonitorBody', gSort);
     updateSortHeaders('gCompleteBody', gCompleteSort);
     renderDailyGapSection();
@@ -5518,25 +5527,57 @@ async function applyGapsFilters() {
     if (store !== 'ALL') parts.push(store);
     const filterText = parts.length ? parts.join(' - ') : 'All months';
 
-    document.getElementById('gRecordsCount').innerHTML = '<span>' + gState.rows.length + '</span> category gap - <span>' + gState.completeRows.length + '</span> complete - <span>' + (gState.daily.summary.totalGapDays || 0) + '</span> daily gap days';
+    document.getElementById('gRecordsCount').innerHTML = '<span>' + gState.rows.length + '</span> category gap - <span>' + categoryCompleteStores().length + '</span> complete stores - <span>' + (gState.daily.summary.totalGapDays || 0) + '</span> daily gap days';
     document.getElementById('gMonitorInfo').textContent = gState.rows.length ? (gState.rows.length + ' store-month gap' + (gState.rows.length !== 1 ? 's' : '') + ' - ' + filterText) : 'No category gaps - ' + filterText;
-    document.getElementById('gCompleteInfo').textContent = gState.completeRows.length + ' complete store-month' + (gState.completeRows.length !== 1 ? 's' : '') + ' - ' + filterText;
+    document.getElementById('gCompleteInfo').textContent = categoryCompleteStores().length + ' complete store' + (categoryCompleteStores().length !== 1 ? 's' : '') + ' - ' + filterText;
   } catch(e) {
     console.error(e);
     document.getElementById('gMonitorBody').innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
+function categoryStoreKey(row) {
+  return normalizeKey(row.area) + '|' + normalizeKey(row.storeId) + '|' + compactKey(row.storeName);
+}
+
+function categoryCompleteStores() {
+  const gapKeys = new Set((gState.rows || []).map(categoryStoreKey));
+  const seen = new Set();
+  return (gState.completeRows || [])
+    .filter(r => !gapKeys.has(categoryStoreKey(r)))
+    .filter(r => {
+      const key = categoryStoreKey(r);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(r => ({
+      area: r.area,
+      storeId: r.storeId,
+      storeName: r.storeName,
+      remarks: 'Complete Category Sales data for the selected period'
+    }));
+}
 function renderGapsTable(rows, tbodyId, mode) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
+  const isComplete = mode === 'complete';
+  const colspan = isComplete ? 4 : 5;
   if (!rows.length) {
-    const msg = mode === 'complete' ? 'No complete store-months found' : 'All expected stores have Category Sales data';
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + msg + '</p><small>Based on the selected month, area, and store filters</small></td></tr>';
+    const msg = isComplete ? 'No stores with complete Category Sales data found' : 'All expected stores have Category Sales data';
+    tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + msg + '</p><small>Based on the selected month, area, and store filters</small></td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    if (isComplete) {
+      return '<tr>' +
+        '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + (escHtml(r.area) || '-') + '</span></td>' +
+        '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + (escHtml(r.storeId) || '-') + '</span></td>' +
+        '<td><div class="store-name">' + (escHtml(r.storeName) || '-') + '</div></td>' +
+        '<td><div class="remarks-cell" style="text-align:left">' + (escHtml(r.remarks) || '-') + '</div></td>' +
+      '</tr>';
+    }
     return '<tr>' +
       '<td><span class="timestamp-cell">' + (escHtml(r.month) || '-') + '</span></td>' +
       '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + (escHtml(r.area) || '-') + '</span></td>' +
@@ -5637,22 +5678,27 @@ function sortGaps(key, type) {
 
 function sortGapsComplete(key, type) {
   if (gCompleteSort.key === key) gCompleteSort.dir = gCompleteSort.dir === 'asc' ? 'desc' : 'asc';
-  else gCompleteSort = { key, dir: key === 'monthKey' ? 'desc' : 'asc', type };
+  else gCompleteSort = { key, dir: 'asc', type };
   gCompleteSort.type = type;
-  renderGapsTable(sortRows(gState.completeRows, gCompleteSort), 'gCompleteBody', 'complete');
+  renderGapsTable(sortRows(categoryCompleteStores(), gCompleteSort), 'gCompleteBody', 'complete');
   updateSortHeaders('gCompleteBody', gCompleteSort);
 }
 
 function exportGapsToExcel(mode) {
   const isComplete = mode === 'complete';
-  const rows = isComplete ? gState.completeRows : gState.rows;
+  const rows = isComplete ? categoryCompleteStores() : gState.rows;
   const sortState = isComplete ? gCompleteSort : gSort;
   if (!rows.length) {
     alert('No data to export with the current filters.');
     return;
   }
 
-  const data = sortRows(rows, sortState).map(r => ({
+  const data = sortRows(rows, sortState).map(r => isComplete ? ({
+    'Area': r.area || '',
+    'Store ID': r.storeId || '',
+    'Store Name': r.storeName || '',
+    'Remarks': r.remarks || ''
+  }) : ({
     'Month': r.month || '',
     'Area': r.area || '',
     'Store ID': r.storeId || '',
@@ -5662,7 +5708,7 @@ function exportGapsToExcel(mode) {
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 48 }];
+  ws['!cols'] = isComplete ? [{ wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 48 }] : [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 48 }];
 
   if (ws['!ref']) {
     const range = XLSX.utils.decode_range(ws['!ref']);

@@ -5536,8 +5536,16 @@ async function applyGapsFilters() {
   }
 }
 
+function clientNormalizeKey(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function clientCompactKey(value) {
+  return clientNormalizeKey(value).replace(/[^a-z0-9]/g, '');
+}
+
 function categoryStoreKey(row) {
-  return normalizeKey(row.area) + '|' + normalizeKey(row.storeId) + '|' + compactKey(row.storeName);
+  return clientNormalizeKey(row.area) + '|' + clientNormalizeKey(row.storeId) + '|' + clientCompactKey(row.storeName);
 }
 
 function categoryCompleteStores() {

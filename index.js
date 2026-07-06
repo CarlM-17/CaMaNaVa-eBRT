@@ -337,7 +337,8 @@ function maxISODate(a, b) {
 
 function storeAuditStartDate(store, defaultStart) {
   const name = normalizeKey(store && store.storeName);
-  if (name.includes('congressional')) return maxISODate(defaultStart, '2026-06-23');
+  const storeId = normalizeKey(store && store.storeId);
+  if (storeId === '867' || name.includes('congressional') || name.includes('cogressional')) return maxISODate(defaultStart, '2026-06-23');
   return defaultStart;
 }
 
@@ -3269,6 +3270,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       <div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-triangle-exclamation"></i> Daily Sales Stores With Gap</div>
+          <button class="export-btn" onclick="exportStoreDayGapTable('daily', 'gap')"><i class="fa fa-file-excel"></i> Export Excel</button>
           <div class="table-date" id="dgGapInfo">-</div>
         </div>
         <div class="table-wrap" style="max-height:520px">
@@ -3285,6 +3287,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       <div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-circle-check"></i> Daily Sales Complete Stores</div>
+          <button class="export-btn" onclick="exportStoreDayGapTable('daily', 'complete')"><i class="fa fa-file-excel"></i> Export Excel</button>
           <div class="table-date" id="dgCompleteInfo">-</div>
         </div>
         <div class="table-wrap" style="max-height:520px">
@@ -3322,6 +3325,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       <div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-triangle-exclamation"></i> Inventory Logs Stores With Gap</div>
+          <button class="export-btn" onclick="exportStoreDayGapTable('inventory', 'gap')"><i class="fa fa-file-excel"></i> Export Excel</button>
           <div class="table-date" id="igGapInfo">-</div>
         </div>
         <div class="table-wrap" style="max-height:520px">
@@ -3338,6 +3342,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       <div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-circle-check"></i> Inventory Logs Complete Stores</div>
+          <button class="export-btn" onclick="exportStoreDayGapTable('inventory', 'complete')"><i class="fa fa-file-excel"></i> Export Excel</button>
           <div class="table-date" id="igCompleteInfo">-</div>
         </div>
         <div class="table-wrap" style="max-height:520px">
@@ -5934,6 +5939,67 @@ function renderDailyGapChart(monthly) {
   });
 }
 
+function exportStoreDayGapTable(source, mode) {
+  const dataSource = source === 'inventory' ? gState.inventory : gState.daily;
+  const rows = mode === 'complete' ? (dataSource.completeRows || []) : (dataSource.gapRows || []);
+  const sourceLabel = source === 'inventory' ? 'Inventory Logs' : 'Daily Sales';
+  const modeLabel = mode === 'complete' ? 'Complete' : 'Gap';
+  if (!rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+
+  const data = rows.map(r => mode === 'complete' ? ({
+    'Month': r.month || '',
+    'Area': r.area || '',
+    'Store ID': r.storeId || '',
+    'Store Name': r.storeName || '',
+    'Expected Days': r.expectedDays || 0,
+    'Reported Days': r.reportedDays || 0,
+    'Completion %': r.completionPct || 0,
+    'Remarks': r.remarks || ''
+  }) : ({
+    'Month': r.month || '',
+    'Area': r.area || '',
+    'Store ID': r.storeId || '',
+    'Store Name': r.storeName || '',
+    'Expected Days': r.expectedDays || 0,
+    'Reported Days': r.reportedDays || 0,
+    'Gap Days': r.gapDays || 0,
+    'Completion %': r.completionPct || 0,
+    'Missing Dates': (r.missingDates || []).join(', ')
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = mode === 'complete'
+    ? [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 42 }]
+    : [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 60 }];
+
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      fill: { fgColor: { rgb: '166534' } },
+      font: { color: { rgb: 'FFFFFF' }, bold: true },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (ws[addr]) ws[addr].s = headerStyle;
+    }
+    for (let R = 1; R <= range.e.r; R++) {
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: C });
+        if (!ws[addr]) continue;
+        const centerCols = mode === 'complete' ? [2, 4, 5, 6] : [2, 4, 5, 6, 7];
+        ws[addr].s = { alignment: { horizontal: centerCols.includes(C) ? 'center' : 'left', vertical: 'center', wrapText: C === range.e.c } };
+      }
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, sourceLabel + ' ' + modeLabel);
+  XLSX.writeFile(wb, 'CaMaNaVa_' + sourceLabel.replace(/\s+/g, '_') + '_' + modeLabel + '_' + issueExportDateTag() + '.xlsx');
+}
 function sortGaps(key, type) {
   if (gSort.key === key) gSort.dir = gSort.dir === 'asc' ? 'desc' : 'asc';
   else gSort = { key, dir: key === 'monthKey' ? 'desc' : 'asc', type };

@@ -395,7 +395,7 @@ function buildStoreDayGapMonitor(logRows, masterStores, filters = {}, options = 
   const storeMonthRows = [];
   months.forEach(m => {
     expectedStores.forEach(s => {
-      const storeStart = storeAuditStartDate(s, startDate);
+      const storeStart = options.applyStoreOpenDate === false ? startDate : storeAuditStartDate(s, startDate);
       const days = daysInMonthWindow(year, parseInt(m.key.slice(5, 7), 10) - 1, storeStart, endDate);
       if (!days.length) return;
       const missingDates = days.filter(date =>
@@ -1219,6 +1219,7 @@ app.get('/api/inventory-log-gaps', async (req, res) => {
       startDate: now.getFullYear() + '-02-02',
       includeToday: true,
       label: 'Inventory Logs data',
+      applyStoreOpenDate: false,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -5825,11 +5826,11 @@ function renderDailyGapSection() {
   document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
   document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
-  document.getElementById('dgGapInfo').textContent = summarizeStoreDayRows(gState.daily.gapRows || []).length + ' stores with gaps';
-  document.getElementById('dgCompleteInfo').textContent = summarizeStoreDayRows(gState.daily.completeRows || []).length + ' complete stores';
+  document.getElementById('dgGapInfo').textContent = storeDaySummaryRows(gState.daily, 'gap').length + ' stores with gaps';
+  document.getElementById('dgCompleteInfo').textContent = storeDaySummaryRows(gState.daily, 'complete').length + ' complete stores';
   renderDailyGapChart(gState.daily.monthly || []);
-  renderDailyRows(gState.daily.gapRows || [], 'dgGapBody', true);
-  renderDailyRows(gState.daily.completeRows || [], 'dgCompleteBody', false);
+  renderDailyRows(storeDaySummaryRows(gState.daily, 'gap'), 'dgGapBody', true);
+  renderDailyRows(storeDaySummaryRows(gState.daily, 'complete'), 'dgCompleteBody', false);
 }
 
 function renderInventoryGapSection() {
@@ -5841,11 +5842,11 @@ function renderInventoryGapSection() {
   document.getElementById('igStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
   document.getElementById('igStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap - ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('igChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'February 2 to today';
-  document.getElementById('igGapInfo').textContent = summarizeStoreDayRows(gState.inventory.gapRows || []).length + ' stores with gaps';
-  document.getElementById('igCompleteInfo').textContent = summarizeStoreDayRows(gState.inventory.completeRows || []).length + ' complete stores';
+  document.getElementById('igGapInfo').textContent = storeDaySummaryRows(gState.inventory, 'gap').length + ' stores with gaps';
+  document.getElementById('igCompleteInfo').textContent = storeDaySummaryRows(gState.inventory, 'complete').length + ' complete stores';
   renderInventoryGapChart(gState.inventory.monthly || []);
-  renderDailyRows(gState.inventory.gapRows || [], 'igGapBody', true);
-  renderDailyRows(gState.inventory.completeRows || [], 'igCompleteBody', false);
+  renderDailyRows(storeDaySummaryRows(gState.inventory, 'gap'), 'igGapBody', true);
+  renderDailyRows(storeDaySummaryRows(gState.inventory, 'complete'), 'igCompleteBody', false);
 }
 
 function renderInventoryGapChart(monthly) {
@@ -5891,6 +5892,10 @@ function summarizeStoreDayRows(rows) {
     ...r,
     completionPct: r.expectedDays ? parseFloat(((r.reportedDays / r.expectedDays) * 100).toFixed(2)) : 0,
   })).sort((a, b) => b.gapDays - a.gapDays || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
+}
+function storeDaySummaryRows(dataSource, mode) {
+  const summary = summarizeStoreDayRows([...(dataSource.gapRows || []), ...(dataSource.completeRows || [])]);
+  return summary.filter(r => mode === 'complete' ? r.gapDays === 0 : r.gapDays > 0);
 }
 function renderDailyRows(rows, tbodyId, isGap) {
   const tbody = document.getElementById(tbodyId);
@@ -5946,7 +5951,7 @@ function renderDailyGapChart(monthly) {
 
 function exportStoreDayGapTable(source, mode) {
   const dataSource = source === 'inventory' ? gState.inventory : gState.daily;
-  const rows = mode === 'complete' ? (dataSource.completeRows || []) : (dataSource.gapRows || []);
+  const rows = storeDaySummaryRows(dataSource, mode);
   const sourceLabel = source === 'inventory' ? 'Inventory Logs' : 'Daily Sales';
   const modeLabel = mode === 'complete' ? 'Complete' : 'Gap';
   if (!rows.length) {
@@ -5954,7 +5959,7 @@ function exportStoreDayGapTable(source, mode) {
     return;
   }
 
-  const summaryRows = summarizeStoreDayRows(rows);
+  const summaryRows = rows;
   const data = summaryRows.map(r => ({
     'Area': r.area || '',
     'Store ID': r.storeId || '',

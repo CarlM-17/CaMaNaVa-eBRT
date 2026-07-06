@@ -3277,10 +3277,10 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           <table>
             <thead>
               <tr>
-                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
+                <th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
               </tr>
             </thead>
-            <tbody id="dgGapBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+            <tbody id="dgGapBody"><tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -3294,10 +3294,10 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           <table>
             <thead>
               <tr>
-                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Completion</th><th>Remarks</th>
+                <th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
               </tr>
             </thead>
-            <tbody id="dgCompleteBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+            <tbody id="dgCompleteBody"><tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -3332,10 +3332,10 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           <table>
             <thead>
               <tr>
-                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
+                <th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
               </tr>
             </thead>
-            <tbody id="igGapBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+            <tbody id="igGapBody"><tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -3349,10 +3349,10 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           <table>
             <thead>
               <tr>
-                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Completion</th><th>Remarks</th>
+                <th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
               </tr>
             </thead>
-            <tbody id="igCompleteBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+            <tbody id="igCompleteBody"><tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -5825,8 +5825,8 @@ function renderDailyGapSection() {
   document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
   document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
-  document.getElementById('dgGapInfo').textContent = (gState.daily.gapRows || []).length + ' store-months with gaps';
-  document.getElementById('dgCompleteInfo').textContent = (gState.daily.completeRows || []).length + ' complete store-months';
+  document.getElementById('dgGapInfo').textContent = summarizeStoreDayRows(gState.daily.gapRows || []).length + ' stores with gaps';
+  document.getElementById('dgCompleteInfo').textContent = summarizeStoreDayRows(gState.daily.completeRows || []).length + ' complete stores';
   renderDailyGapChart(gState.daily.monthly || []);
   renderDailyRows(gState.daily.gapRows || [], 'dgGapBody', true);
   renderDailyRows(gState.daily.completeRows || [], 'dgCompleteBody', false);
@@ -5841,8 +5841,8 @@ function renderInventoryGapSection() {
   document.getElementById('igStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
   document.getElementById('igStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap - ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('igChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'February 2 to today';
-  document.getElementById('igGapInfo').textContent = (gState.inventory.gapRows || []).length + ' store-months with gaps';
-  document.getElementById('igCompleteInfo').textContent = (gState.inventory.completeRows || []).length + ' complete store-months';
+  document.getElementById('igGapInfo').textContent = summarizeStoreDayRows(gState.inventory.gapRows || []).length + ' stores with gaps';
+  document.getElementById('igCompleteInfo').textContent = summarizeStoreDayRows(gState.inventory.completeRows || []).length + ' complete stores';
   renderInventoryGapChart(gState.inventory.monthly || []);
   renderDailyRows(gState.inventory.gapRows || [], 'igGapBody', true);
   renderDailyRows(gState.inventory.completeRows || [], 'igCompleteBody', false);
@@ -5875,38 +5875,43 @@ function renderInventoryGapChart(monthly) {
     }
   });
 }
+function summarizeStoreDayRows(rows) {
+  const map = new Map();
+  (rows || []).forEach(r => {
+    const key = clientNormalizeKey(r.area) + '|' + clientNormalizeKey(r.storeId) + '|' + clientCompactKey(r.storeName);
+    if (!map.has(key)) {
+      map.set(key, { area: r.area, storeId: r.storeId, storeName: r.storeName, expectedDays: 0, reportedDays: 0, gapDays: 0 });
+    }
+    const item = map.get(key);
+    item.expectedDays += r.expectedDays || 0;
+    item.reportedDays += r.reportedDays || 0;
+    item.gapDays += r.gapDays || 0;
+  });
+  return [...map.values()].map(r => ({
+    ...r,
+    completionPct: r.expectedDays ? parseFloat(((r.reportedDays / r.expectedDays) * 100).toFixed(2)) : 0,
+  })).sort((a, b) => b.gapDays - a.gapDays || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
+}
 function renderDailyRows(rows, tbodyId, isGap) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
-  const colspan = 8;
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + (isGap ? 'No Daily Sales gaps found' : 'No complete Daily Sales store-months found') + '</p></td></tr>';
+  const summaryRows = summarizeStoreDayRows(rows);
+  const colspan = 7;
+  if (!summaryRows.length) {
+    tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>' + (isGap ? 'No gaps found' : 'No complete stores found') + '</p></td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => {
+  tbody.innerHTML = summaryRows.map(r => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
     const pct = (r.completionPct || 0).toFixed(2) + '%';
-    if (isGap) {
-      return '<tr>' +
-        '<td><span class="timestamp-cell">' + escHtml(r.month) + '</span></td>' +
-        '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area) + '</span></td>' +
-        '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + escHtml(r.storeId) + '</span></td>' +
-        '<td><div class="store-name">' + escHtml(r.storeName) + '</div></td>' +
-        '<td style="text-align:center"><span class="num">' + r.expectedDays + '</span></td>' +
-        '<td style="text-align:center"><span class="num">' + r.reportedDays + '</span></td>' +
-        '<td style="text-align:center"><span class="pill down">' + r.gapDays + '</span></td>' +
-        '<td style="text-align:center"><span class="pill ' + (r.completionPct >= 99.999 ? 'up' : 'down') + '">' + pct + '</span></td>' +
-      '</tr>';
-    }
     return '<tr>' +
-      '<td><span class="timestamp-cell">' + escHtml(r.month) + '</span></td>' +
       '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area) + '</span></td>' +
       '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#' + escHtml(r.storeId) + '</span></td>' +
       '<td><div class="store-name">' + escHtml(r.storeName) + '</div></td>' +
       '<td style="text-align:center"><span class="num">' + r.expectedDays + '</span></td>' +
       '<td style="text-align:center"><span class="num">' + r.reportedDays + '</span></td>' +
-      '<td style="text-align:center"><span class="pill up">' + pct + '</span></td>' +
-      '<td><div class="remarks-cell" style="text-align:left">' + escHtml(r.remarks) + '</div></td>' +
+      '<td style="text-align:center"><span class="pill ' + (r.gapDays > 0 ? 'down' : 'up') + '">' + r.gapDays + '</span></td>' +
+      '<td style="text-align:center"><span class="pill ' + (r.completionPct >= 99.999 ? 'up' : 'down') + '">' + pct + '</span></td>' +
     '</tr>';
   }).join('');
 }
@@ -5949,32 +5954,20 @@ function exportStoreDayGapTable(source, mode) {
     return;
   }
 
-  const data = rows.map(r => mode === 'complete' ? ({
-    'Month': r.month || '',
+  const summaryRows = summarizeStoreDayRows(rows);
+  const data = summaryRows.map(r => ({
     'Area': r.area || '',
     'Store ID': r.storeId || '',
     'Store Name': r.storeName || '',
-    'Expected Days': r.expectedDays || 0,
-    'Reported Days': r.reportedDays || 0,
-    'Completion %': r.completionPct || 0,
-    'Remarks': r.remarks || ''
-  }) : ({
-    'Month': r.month || '',
-    'Area': r.area || '',
-    'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
-    'Expected Days': r.expectedDays || 0,
-    'Reported Days': r.reportedDays || 0,
+    'Expected': r.expectedDays || 0,
+    'Reported': r.reportedDays || 0,
     'Gap Days': r.gapDays || 0,
-    'Completion %': r.completionPct || 0,
-    'Missing Dates': (r.missingDates || []).join(', ')
+    'Completion %': r.completionPct || 0
   }));
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = mode === 'complete'
-    ? [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 42 }]
-    : [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 60 }];
+  ws['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }];
 
   if (ws['!ref']) {
     const range = XLSX.utils.decode_range(ws['!ref']);
@@ -5991,8 +5984,8 @@ function exportStoreDayGapTable(source, mode) {
       for (let C = range.s.c; C <= range.e.c; C++) {
         const addr = XLSX.utils.encode_cell({ r: R, c: C });
         if (!ws[addr]) continue;
-        const centerCols = mode === 'complete' ? [2, 4, 5, 6] : [2, 4, 5, 6, 7];
-        ws[addr].s = { alignment: { horizontal: centerCols.includes(C) ? 'center' : 'left', vertical: 'center', wrapText: C === range.e.c } };
+        const centerCols = [1, 3, 4, 5, 6];
+        ws[addr].s = { alignment: { horizontal: centerCols.includes(C) ? 'center' : 'left', vertical: 'center', wrapText: false } };
       }
     }
   }

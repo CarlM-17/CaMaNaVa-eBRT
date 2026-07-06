@@ -914,6 +914,56 @@ app.get('/api/category', async (req, res) => {
   }
 });
 
+app.get('/api/data-gaps', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    let [data, masterStores] = await Promise.all([getCategoryData(sheets), getMasterStoreList(sheets)]);
+    data = scopeRowsByArea(data, req.user);
+    masterStores = scopeRowsByArea(masterStores, req.user);
+
+    const { month, area, store } = req.query;
+    const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
+    const rows = buildCategoryMonitorRows(data, masterStores, { monthKey: selectedMonthKey, area, store });
+
+    res.json({ success: true, rows, count: rows.length });
+  } catch (err) {
+    console.error('Data-gaps error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/data-gap-filters', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    let [data, masterStores] = await Promise.all([getCategoryData(sheets), getMasterStoreList(sheets)]);
+    data = scopeRowsByArea(data, req.user);
+    masterStores = scopeRowsByArea(masterStores, req.user);
+
+    const { area: filterArea } = req.query;
+    const monthMap = new Map();
+    data.forEach(r => {
+      if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
+    });
+    const months = [...monthMap.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+
+    const areas = new Set();
+    const stores = new Set();
+    masterStores.forEach(s => {
+      if (s.area) areas.add(s.area);
+      if (s.storeName && (!filterArea || filterArea === 'ALL' || s.area === filterArea)) stores.add(s.storeName);
+    });
+
+    res.json({ success: true, months, areas: [...areas].sort(), stores: [...stores].sort() });
+  } catch (err) {
+    console.error('Data-gap-filters error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/category-breakdown', async (req, res) => {
   try {
     const auth = getAuthClient();
@@ -2237,6 +2287,9 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     <button class="tab-btn" data-tab="category" onclick="switchTab('category')">
       <i class="fa fa-tags"></i> Category Sales
     </button>
+    <button class="tab-btn" data-tab="gaps" onclick="switchTab('gaps')">
+      <i class="fa fa-clipboard-check"></i> Data Gaps Monitoring
+    </button>
     <button class="tab-btn" data-tab="notes" onclick="switchTab('notes')">
       <i class="fa fa-note-sticky"></i> Store Notes
     </button>
@@ -2793,32 +2846,65 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
         </table>
       </div>
     </div>
+  </div><!-- /tab-category -->
 
-    <!-- Category Data Monitoring -->
-    <div class="table-card" style="margin-top:24px">
-      <div class="table-header">
-        <div class="table-title"><i class="fa fa-clipboard-check"></i> Category Data Monitoring</div>
-        <div class="table-date" id="cMonitorInfo">â€”</div>
+  <!--  DATA GAPS MONITORING TAB  -->
+  <div class="tab-content" id="tab-gaps">
+
+    <!-- Controls -->
+    <div class="controls">
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-calendar"></i> Month</span>
+        <select id="gMonthFilter" onchange="applyGapsFilters()">
+          <option value="ALL">All Months</option>
+        </select>
       </div>
-      <div class="table-wrap" style="max-height:420px">
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-layer-group"></i> Area</span>
+        <select id="gAreaFilter" onchange="onGAreaChange()">
+          <option value="ALL">All Areas</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-store"></i> Store</span>
+        <select id="gStoreFilter" onchange="applyGapsFilters()">
+          <option value="ALL">All Stores</option>
+        </select>
+      </div>
+      <div class="records-count" id="gRecordsCount">-</div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-header" style="gap:14px;flex-wrap:wrap">
+        <div class="table-title"><i class="fa fa-clipboard-check"></i> Category Data Monitoring</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+          <button class="export-btn" onclick="exportGapsToExcel()">
+            <i class="fa fa-file-excel"></i> Export Excel
+          </button>
+          <div class="table-date" id="gMonitorInfo">-</div>
+        </div>
+      </div>
+      <div class="table-wrap" style="max-height:720px">
         <table>
           <thead>
             <tr>
-              <th>Month</th>
-              <th>Area</th>
-              <th>Store ID</th>
-              <th>Store Name</th>
+              <th class="sortable" data-sort-key="monthKey" data-sort-type="string" onclick="sortGaps('monthKey','string')">Month <span class="sort-icon">&harr;</span></th>
+              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortGaps('area','string')">Area <span class="sort-icon">&harr;</span></th>
+              <th class="sortable" data-sort-key="storeId" data-sort-type="num" style="text-align:center" onclick="sortGaps('storeId','num')">Store ID <span class="sort-icon">&harr;</span></th>
+              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortGaps('storeName','string')">Store Name <span class="sort-icon">&harr;</span></th>
               <th>Remarks</th>
             </tr>
           </thead>
-          <tbody id="cMonitorBody">
+          <tbody id="gMonitorBody">
             <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
     </div>
 
-  </div><!-- /tab-category -->
+  </div><!-- /tab-gaps -->
 
   <!--  STORE NOTES TAB  -->
   <div class="tab-content" id="tab-notes">
@@ -3224,7 +3310,6 @@ let cSummaryRowsCache = [];
 let cDetailRowsCache = [];
 let cAreaRowsCache = [];
 let cStoreRowsCache = [];
-let cMonitorRowsCache = [];
 let cSummarySort = { key: 'sales', dir: 'desc', type: 'num' };
 let cDetailSort  = { key: 'sales', dir: 'desc', type: 'num' };
 let cAreaSort    = { key: 'sales', dir: 'desc', type: 'num' };
@@ -3232,6 +3317,10 @@ let cStoreSort   = { key: 'sales', dir: 'desc', type: 'num' };
 let cFilters = { months: [], categories: [], areas: [], stores: [] };
 let cBreakdownData = []; // raw filtered data for breakdown filtering
 let cSubDepsForBreakdown = []; // list of sub-depts grouped by category
+
+// Data gaps monitoring state
+let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [] };
+let gSort = { key: 'monthKey', dir: 'desc', type: 'string' };
 
 // Daily sort state
 let dailyRowsCache = [];
@@ -3257,6 +3346,9 @@ function switchTab(tab) {
   }
   if (tab === 'category' && !cFilters.categories.length) {
     initCategoryTab();
+  }
+  if (tab === 'gaps' && !gState.initialized) {
+    initGapsTab();
   }
   if (tab === 'notes' && !nState.initialized) {
     initNotesTab();
@@ -4564,13 +4656,11 @@ async function applyCategoryFilters() {
     const byStore = json.byStore || [];
     const subDepsByCategory = json.subDepsByCategory || {};
     const movers = json.movers || { top: [], bottom: [] };
-    const monitorRows = json.monitorRows || [];
 
     cSummaryRowsCache = summary;
     cDetailRowsCache = detail;
     cAreaRowsCache = byArea;
     cStoreRowsCache = byStore;
-    cMonitorRowsCache = monitorRows;
     cSubDepsForBreakdown = subDepsByCategory;
 
     // Reset breakdown filters to ALL on main filter change
@@ -4597,8 +4687,6 @@ async function applyCategoryFilters() {
     renderCCharts(summary, byArea, movers);
     renderCAreaTable(sortRows(byArea, cAreaSort));
     renderCStoreTable(sortRows(byStore, cStoreSort));
-    renderCMonitorTable(monitorRows);
-    document.getElementById('cMonitorInfo').textContent = monitorRows.length ? (monitorRows.length + ' store-month gap' + (monitorRows.length !== 1 ? 's' : '')) : 'Complete';
     updateSortHeaders('cAreaTableBody', cAreaSort);
     updateSortHeaders('cStoreTableBody', cStoreSort);
     document.getElementById('cAreaTableInfo').textContent = parts.length ? parts.join(' · ') : 'All data';
@@ -5073,8 +5161,105 @@ function renderCStoreTable(rows) {
   tbody.innerHTML = html;
 }
 
-function renderCMonitorTable(rows) {
-  const tbody = document.getElementById('cMonitorBody');
+async function initGapsTab() {
+  try {
+    const res = await fetch('/api/data-gap-filters');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+
+    gState.filters = json;
+
+    const mSel = document.getElementById('gMonthFilter');
+    mSel.innerHTML = '<option value="ALL">All Months</option>';
+    json.months.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.value || m;
+      o.textContent = m.label || m;
+      mSel.appendChild(o);
+    });
+
+    const aSel = document.getElementById('gAreaFilter');
+    aSel.innerHTML = '<option value="ALL">All Areas</option>';
+    json.areas.forEach(a => {
+      const o = document.createElement('option');
+      o.value = o.textContent = a;
+      aSel.appendChild(o);
+    });
+
+    populateGStores(json.stores);
+    gState.initialized = true;
+    await applyGapsFilters();
+  } catch(e) {
+    console.error('Data gaps init error:', e);
+    document.getElementById('gMonitorBody').innerHTML =
+      \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function populateGStores(stores) {
+  const sel = document.getElementById('gStoreFilter');
+  sel.innerHTML = '<option value="ALL">All Stores</option>';
+  stores.forEach(s => {
+    const o = document.createElement('option');
+    o.value = o.textContent = s;
+    sel.appendChild(o);
+  });
+}
+
+async function onGAreaChange() {
+  const area = document.getElementById('gAreaFilter').value;
+  if (area === 'ALL') {
+    populateGStores(gState.filters.stores);
+  } else {
+    try {
+      const res = await fetch('/api/data-gap-filters?area=' + encodeURIComponent(area));
+      const json = await res.json();
+      if (json.success) populateGStores(json.stores);
+    } catch(e) {}
+  }
+  document.getElementById('gStoreFilter').value = 'ALL';
+  await applyGapsFilters();
+}
+
+async function applyGapsFilters() {
+  const month = document.getElementById('gMonthFilter').value;
+  const area = document.getElementById('gAreaFilter').value;
+  const store = document.getElementById('gStoreFilter').value;
+
+  const params = new URLSearchParams();
+  if (month !== 'ALL') params.set('month', month);
+  if (area !== 'ALL') params.set('area', area);
+  if (store !== 'ALL') params.set('store', store);
+
+  try {
+    const res = await fetch('/api/data-gaps?' + params);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+
+    gState.rows = json.rows || [];
+    renderGapsTable(sortRows(gState.rows, gSort));
+    updateSortHeaders('gMonitorBody', gSort);
+
+    document.getElementById('gRecordsCount').innerHTML =
+      \`<span>\${gState.rows.length}</span> store-month gap\${gState.rows.length !== 1 ? 's' : ''}\`;
+
+    const parts = [];
+    if (month !== 'ALL') parts.push(selectedOptionText('gMonthFilter'));
+    if (area !== 'ALL') parts.push(area);
+    if (store !== 'ALL') parts.push(store);
+    const filterText = parts.length ? parts.join(' - ') : 'All months';
+    document.getElementById('gMonitorInfo').textContent = gState.rows.length
+      ? (gState.rows.length + ' store-month gap' + (gState.rows.length !== 1 ? 's' : '') + ' - ' + filterText)
+      : 'Complete - ' + filterText;
+  } catch(e) {
+    console.error(e);
+    document.getElementById('gMonitorBody').innerHTML =
+      \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>\${e.message}</p></td></tr>\`;
+  }
+}
+
+function renderGapsTable(rows) {
+  const tbody = document.getElementById('gMonitorBody');
   if (!tbody) return;
   if (!rows.length) {
     tbody.innerHTML = \`<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>All expected stores have Category Sales data</p><small>Based on the selected month, area, and store filters</small></td></tr>\`;
@@ -5083,15 +5268,70 @@ function renderCMonitorTable(rows) {
   tbody.innerHTML = rows.map(r => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
     return \`<tr>
-      <td><span class="timestamp-cell">\${escHtml(r.month) || 'â€”'}</span></td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area) || 'â€”'}</span></td>
-      <td><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId) || 'â€”'}</span></td>
-      <td><div class="store-name">\${escHtml(r.storeName) || 'â€”'}</div></td>
-      <td><div class="remarks-cell">\${escHtml(r.remarks) || 'â€”'}</div></td>
+      <td><span class="timestamp-cell">\${escHtml(r.month) || '-'}</span></td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area) || '-'}</span></td>
+      <td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId) || '-'}</span></td>
+      <td><div class="store-name">\${escHtml(r.storeName) || '-'}</div></td>
+      <td><div class="remarks-cell" style="text-align:left">\${escHtml(r.remarks) || '-'}</div></td>
     </tr>\`;
   }).join('');
 }
 
+function sortGaps(key, type) {
+  if (gSort.key === key) gSort.dir = gSort.dir === 'asc' ? 'desc' : 'asc';
+  else gSort = { key, dir: key === 'month' ? 'desc' : 'asc', type };
+  gSort.type = type;
+  renderGapsTable(sortRows(gState.rows, gSort));
+  updateSortHeaders('gMonitorBody', gSort);
+}
+
+function exportGapsToExcel() {
+  if (!gState.rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+
+  const data = sortRows(gState.rows, gSort).map(r => ({
+    'Month': r.month || '',
+    'Area': r.area || '',
+    'Store ID': r.storeId || '',
+    'Store Name': r.storeName || '',
+    'Remarks': r.remarks || ''
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 30 }, { wch: 48 }];
+
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      fill: { fgColor: { rgb: '166534' } },
+      font: { color: { rgb: 'FFFFFF' }, bold: true },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (ws[addr]) ws[addr].s = headerStyle;
+    }
+    for (let R = 1; R <= range.e.r; R++) {
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: C });
+        if (!ws[addr]) continue;
+        ws[addr].s = {
+          alignment: {
+            horizontal: C === 2 ? 'center' : 'left',
+            vertical: 'center',
+            wrapText: C === 4
+          }
+        };
+      }
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Data Gaps');
+  XLSX.writeFile(wb, 'CaMaNaVa_Data_Gaps_' + issueExportDateTag() + '.xlsx');
+}
 function sortCArea(key, type) {
   if (cAreaSort.key === key) cAreaSort.dir = cAreaSort.dir === 'asc' ? 'desc' : 'asc';
   else cAreaSort = { key, dir: 'desc', type };

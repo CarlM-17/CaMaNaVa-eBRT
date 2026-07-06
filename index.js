@@ -16,6 +16,7 @@ const CATEGORY_RANGE = 'CategorySales!A:I';
 const STORE_NOTES_RANGE = 'StoreNotes!A:M';
 const ISSUES_RANGE = 'StoreOpsIssuesAndConcerns!A5:R';
 const USERS_RANGE = 'user!B2:E';
+const INVENTORY_LOGS_RANGE = 'InventoryLogs!A6:Z';
 const SESSION_COOKIE = 'camanava_session';
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const SESSION_SECRET = process.env.SESSION_SECRET || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || 'change-me-in-env';
@@ -241,6 +242,7 @@ let salesCache = null, salesCacheTime = 0;
 let categoryCache = null, categoryCacheTime = 0;
 let storeNotesCache = null, storeNotesCacheTime = 0;
 let issuesCache = null, issuesCacheTime = 0;
+let inventoryLogsCache = null, inventoryLogsCacheTime = 0;
 const CACHE_TTL = 5 * 60 * 1000;
 
 async function getMasterStoreList(sheets) {
@@ -292,6 +294,171 @@ async function getSalesData(sheets) {
   return salesCache;
 }
 
+function findHeaderIndex(headers, patterns, fallback) {
+  const normalized = headers.map(h => normalizeKey(h));
+  for (const pattern of patterns) {
+    const idx = normalized.findIndex(h => pattern.test(h));
+    if (idx >= 0) return idx;
+  }
+  return fallback;
+}
+
+async function getInventoryLogsData(sheets) {
+  const now = Date.now();
+  if (inventoryLogsCache && (now - inventoryLogsCacheTime) < CACHE_TTL) return inventoryLogsCache;
+  const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: INVENTORY_LOGS_RANGE });
+  const rows = response.data.values || [];
+  if (!rows.length) return [];
+
+  const headers = rows[0] || [];
+  const dateIdx = 0;
+  const areaIdx = findHeaderIndex(headers, [/^area$/, /area/], 1);
+  const storeIdIdx = findHeaderIndex(headers, [/store.*id/, /store.*code/, /^id$/], 2);
+  const storeNameIdx = findHeaderIndex(headers, [/store.*name/, /^store$/, /branch/], 3);
+
+  inventoryLogsCache = rows.slice(1).map(r => {
+    const dateRaw = (r[dateIdx] || '').trim();
+    return {
+      date: parseDate(dateRaw) || parseDateFlexible(dateRaw)?.toISOString().slice(0, 10) || null,
+      area: (r[areaIdx] || '').trim(),
+      storeId: (r[storeIdIdx] || '').trim(),
+      storeName: (r[storeNameIdx] || '').trim(),
+    };
+  }).filter(r => r.date && (r.storeId || r.storeName));
+  inventoryLogsCacheTime = now;
+  return inventoryLogsCache;
+}
+
+function maxISODate(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+
+function storeAuditStartDate(store, defaultStart) {
+  const name = normalizeKey(store && store.storeName);
+  if (name.includes('congressional')) return maxISODate(defaultStart, '2026-06-23');
+  return defaultStart;
+}
+
+function daysInMonthWindow(year, monthIndex, startDate, endDate) {
+  const monthStart = year + '-' + String(monthIndex + 1).padStart(2, '0') + '-01';
+  const monthEnd = year + '-' + String(monthIndex + 1).padStart(2, '0') + '-' + String(new Date(year, monthIndex + 1, 0).getDate()).padStart(2, '0');
+  const start = maxISODate(monthStart, startDate);
+  const end = monthEnd < endDate ? monthEnd : endDate;
+  if (!start || !end || start > end) return [];
+  const days = [];
+  const d = new Date(start + 'T00:00:00');
+  const stop = new Date(end + 'T00:00:00');
+  while (d <= stop) {
+    days.push(formatISODateLocal(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+function buildStoreDayGapMonitor(logRows, masterStores, filters = {}, options = {}) {
+  const now = new Date();
+  const endDateObj = options.includeToday
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    : new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const endDate = formatISODateLocal(endDateObj);
+  const year = endDateObj.getFullYear();
+  const startDate = options.startDate || (year + '-01-01');
+  const selectedMonth = filters.month || 'ALL';
+  const area = filters.area || 'ALL';
+  const store = filters.store || 'ALL';
+  const label = options.label || 'data';
+
+  let expectedStores = masterStores;
+  if (area && area !== 'ALL') expectedStores = expectedStores.filter(s => s.area === area);
+  if (store && store !== 'ALL') expectedStores = expectedStores.filter(s => s.storeName === store);
+
+  const reported = new Set();
+  logRows.forEach(r => {
+    if (!r.date || String(r.date).slice(0, 4) !== String(year)) return;
+    if (r.storeId) reported.add('id:' + normalizeKey(r.storeId) + '|' + r.date);
+    if (r.storeName) {
+      reported.add('name:' + normalizeKey(r.storeName) + '|' + r.date);
+      reported.add('cname:' + compactKey(r.storeName) + '|' + r.date);
+    }
+  });
+
+  const months = [];
+  for (let m = 0; m <= endDateObj.getMonth(); m++) {
+    const key = year + '-' + String(m + 1).padStart(2, '0');
+    if (selectedMonth !== 'ALL' && selectedMonth !== key) continue;
+    months.push({ key, label: monthLabel(key) });
+  }
+
+  const storeMonthRows = [];
+  months.forEach(m => {
+    expectedStores.forEach(s => {
+      const storeStart = storeAuditStartDate(s, startDate);
+      const days = daysInMonthWindow(year, parseInt(m.key.slice(5, 7), 10) - 1, storeStart, endDate);
+      if (!days.length) return;
+      const missingDates = days.filter(date =>
+        !reported.has('id:' + normalizeKey(s.storeId) + '|' + date) &&
+        !reported.has('name:' + normalizeKey(s.storeName) + '|' + date) &&
+        !reported.has('cname:' + compactKey(s.storeName) + '|' + date)
+      );
+      const expectedDays = days.length;
+      const gapDays = missingDates.length;
+      const reportedDays = expectedDays - gapDays;
+      const completionPct = expectedDays ? (reportedDays / expectedDays) * 100 : 0;
+      storeMonthRows.push({
+        month: m.label,
+        monthKey: m.key,
+        area: s.area,
+        storeId: s.storeId,
+        storeName: s.storeName,
+        expectedDays,
+        reportedDays,
+        gapDays,
+        completionPct: parseFloat(completionPct.toFixed(2)),
+        missingDates,
+        status: gapDays ? 'With Gap' : 'Complete',
+        remarks: gapDays ? (gapDays + ' day' + (gapDays !== 1 ? 's' : '') + ' missing') : 'Complete ' + label,
+      });
+    });
+  });
+
+  const gapRows = storeMonthRows.filter(r => r.gapDays > 0).sort((a, b) => b.gapDays - a.gapDays || a.monthKey.localeCompare(b.monthKey) || (a.storeName || '').localeCompare(b.storeName || ''));
+  const completeRows = storeMonthRows.filter(r => r.gapDays === 0).sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
+  const monthly = months.map(m => {
+    const rows = storeMonthRows.filter(r => r.monthKey === m.key);
+    const expectedStoreDays = rows.reduce((sum, r) => sum + r.expectedDays, 0);
+    const gapDays = rows.reduce((sum, r) => sum + r.gapDays, 0);
+    return {
+      month: m.label,
+      monthKey: m.key,
+      expectedStoreDays,
+      reportedStoreDays: expectedStoreDays - gapDays,
+      gapDays,
+      completeStores: rows.filter(r => r.gapDays === 0).length,
+      storesWithGaps: rows.filter(r => r.gapDays > 0).length,
+      completionPct: expectedStoreDays ? parseFloat((((expectedStoreDays - gapDays) / expectedStoreDays) * 100).toFixed(2)) : 0,
+    };
+  });
+  const totalExpectedStoreDays = monthly.reduce((sum, r) => sum + r.expectedStoreDays, 0);
+  const totalGapDays = monthly.reduce((sum, r) => sum + r.gapDays, 0);
+  return {
+    summary: {
+      year,
+      throughDate: endDate,
+      storeMonths: storeMonthRows.length,
+      gapStoreMonths: gapRows.length,
+      completeStoreMonths: completeRows.length,
+      totalExpectedStoreDays,
+      totalReportedStoreDays: totalExpectedStoreDays - totalGapDays,
+      totalGapDays,
+      completionPct: totalExpectedStoreDays ? parseFloat((((totalExpectedStoreDays - totalGapDays) / totalExpectedStoreDays) * 100).toFixed(2)) : 0,
+    },
+    monthly,
+    gapRows,
+    completeRows,
+  };
+}
 async function getCategoryData(sheets) {
   const now = Date.now();
   if (categoryCache && (now - categoryCacheTime) < CACHE_TTL) return categoryCache;
@@ -409,93 +576,11 @@ function daysInMonthUntil(year, monthIndex, endDate) {
 function buildDailySalesGapMonitor(salesRows, masterStores, filters = {}) {
   const now = new Date();
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const year = yesterday.getFullYear();
-  const selectedMonth = filters.month || 'ALL';
-  const area = filters.area || 'ALL';
-  const store = filters.store || 'ALL';
-
-  let expectedStores = masterStores;
-  if (area && area !== 'ALL') expectedStores = expectedStores.filter(s => s.area === area);
-  if (store && store !== 'ALL') expectedStores = expectedStores.filter(s => s.storeName === store);
-
-  const reported = new Set();
-  salesRows.forEach(r => {
-    if (!r.date) return;
-    if (String(r.date).slice(0, 4) !== String(year)) return;
-    if (r.storeId) reported.add('id:' + normalizeKey(r.storeId) + '|' + r.date);
-    if (r.storeName) reported.add('name:' + normalizeKey(r.storeName) + '|' + r.date);
+  return buildStoreDayGapMonitor(salesRows, masterStores, filters, {
+    startDate: yesterday.getFullYear() + '-01-01',
+    includeToday: false,
+    label: 'Daily Sales data',
   });
-
-  const months = [];
-  const lastMonth = yesterday.getMonth();
-  for (let m = 0; m <= lastMonth; m++) {
-    const key = year + '-' + String(m + 1).padStart(2, '0');
-    if (selectedMonth !== 'ALL' && selectedMonth !== key) continue;
-    months.push({ key, label: monthLabel(key), days: daysInMonthUntil(year, m, yesterday) });
-  }
-
-  const storeMonthRows = [];
-  months.forEach(m => {
-    expectedStores.forEach(s => {
-      const missingDates = m.days.filter(date =>
-        !reported.has('id:' + normalizeKey(s.storeId) + '|' + date) &&
-        !reported.has('name:' + normalizeKey(s.storeName) + '|' + date)
-      );
-      const expectedDays = m.days.length;
-      const gapDays = missingDates.length;
-      const reportedDays = expectedDays - gapDays;
-      const completionPct = expectedDays ? (reportedDays / expectedDays) * 100 : 0;
-      storeMonthRows.push({
-        month: m.label,
-        monthKey: m.key,
-        area: s.area,
-        storeId: s.storeId,
-        storeName: s.storeName,
-        expectedDays,
-        reportedDays,
-        gapDays,
-        completionPct: parseFloat(completionPct.toFixed(2)),
-        missingDates,
-        status: gapDays ? 'With Gap' : 'Complete',
-        remarks: gapDays ? (gapDays + ' day' + (gapDays !== 1 ? 's' : '') + ' missing') : 'Complete Daily Sales data',
-      });
-    });
-  });
-
-  const gapRows = storeMonthRows.filter(r => r.gapDays > 0).sort((a, b) => b.gapDays - a.gapDays || a.monthKey.localeCompare(b.monthKey) || (a.storeName || '').localeCompare(b.storeName || ''));
-  const completeRows = storeMonthRows.filter(r => r.gapDays === 0).sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.area || '').localeCompare(b.area || '') || (a.storeName || '').localeCompare(b.storeName || ''));
-  const monthly = months.map(m => {
-    const rows = storeMonthRows.filter(r => r.monthKey === m.key);
-    const expectedStoreDays = rows.reduce((sum, r) => sum + r.expectedDays, 0);
-    const gapDays = rows.reduce((sum, r) => sum + r.gapDays, 0);
-    const completeStores = rows.filter(r => r.gapDays === 0).length;
-    const storesWithGaps = rows.filter(r => r.gapDays > 0).length;
-    return {
-      month: m.label,
-      monthKey: m.key,
-      expectedStoreDays,
-      reportedStoreDays: expectedStoreDays - gapDays,
-      gapDays,
-      completeStores,
-      storesWithGaps,
-      completionPct: expectedStoreDays ? parseFloat((((expectedStoreDays - gapDays) / expectedStoreDays) * 100).toFixed(2)) : 0,
-    };
-  });
-  const totalExpectedStoreDays = monthly.reduce((sum, r) => sum + r.expectedStoreDays, 0);
-  const totalGapDays = monthly.reduce((sum, r) => sum + r.gapDays, 0);
-  const summary = {
-    year,
-    throughDate: formatISODateLocal(yesterday),
-    storeMonths: storeMonthRows.length,
-    gapStoreMonths: gapRows.length,
-    completeStoreMonths: completeRows.length,
-    totalExpectedStoreDays,
-    totalReportedStoreDays: totalExpectedStoreDays - totalGapDays,
-    totalGapDays,
-    completionPct: totalExpectedStoreDays ? parseFloat((((totalExpectedStoreDays - totalGapDays) / totalExpectedStoreDays) * 100).toFixed(2)) : 0,
-  };
-
-  return { summary, monthly, gapRows, completeRows };
 }
 
 async function getStoreNotesData(sheets) {
@@ -920,9 +1005,9 @@ app.get('/api/category-filters', async (req, res) => {
       if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
     });
     const now = new Date();
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    const monitorYear = yesterday.getFullYear();
-    for (let m = 0; m <= yesterday.getMonth(); m++) {
+    const monitorDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const monitorYear = monitorDate.getFullYear();
+    for (let m = 0; m <= monitorDate.getMonth(); m++) {
       const key = monitorYear + '-' + String(m + 1).padStart(2, '0');
       if (!monthMap.has(key)) monthMap.set(key, monthLabel(key));
     }
@@ -1107,6 +1192,39 @@ app.get('/api/daily-sales-gaps', async (req, res) => {
   }
 });
 
+app.get('/api/inventory-log-gaps', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    let [data, masterStores] = await Promise.all([getInventoryLogsData(sheets), getMasterStoreList(sheets)]);
+    const storeLookup = new Map();
+    masterStores.forEach(s => {
+      if (s.storeId) storeLookup.set('id:' + normalizeKey(s.storeId), s);
+      if (s.storeName) {
+        storeLookup.set('name:' + normalizeKey(s.storeName), s);
+        storeLookup.set('cname:' + compactKey(s.storeName), s);
+      }
+    });
+    data = data.map(r => {
+      const master = storeLookup.get('id:' + normalizeKey(r.storeId)) || storeLookup.get('name:' + normalizeKey(r.storeName)) || storeLookup.get('cname:' + compactKey(r.storeName));
+      return master ? { ...r, area: r.area || master.area, storeId: r.storeId || master.storeId, storeName: r.storeName || master.storeName } : r;
+    });
+    data = scopeRowsByArea(data, req.user);
+    masterStores = scopeRowsByArea(masterStores, req.user);
+
+    const { month, area, store } = req.query;
+    const now = new Date();
+    const result = buildStoreDayGapMonitor(data, masterStores, { month, area, store }, {
+      startDate: now.getFullYear() + '-02-02',
+      includeToday: true,
+      label: 'Inventory Logs data',
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Inventory-log-gaps error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 app.get('/api/data-gap-filters', async (req, res) => {
   try {
     const auth = getAuthClient();
@@ -1121,9 +1239,9 @@ app.get('/api/data-gap-filters', async (req, res) => {
       if (r.monthKey && !monthMap.has(r.monthKey)) monthMap.set(r.monthKey, r.month || categoryMonthLabel(r.monthRaw, r.monthKey));
     });
     const now = new Date();
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    const monitorYear = yesterday.getFullYear();
-    for (let m = 0; m <= yesterday.getMonth(); m++) {
+    const monitorDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const monitorYear = monitorDate.getFullYear();
+    for (let m = 0; m <= monitorDate.getMonth(); m++) {
       const key = monitorYear + '-' + String(m + 1).padStart(2, '0');
       if (!monthMap.has(key)) monthMap.set(key, monthLabel(key));
     }
@@ -3115,6 +3233,21 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     </div>
 
     <div class="kpi-grid" style="margin-top:24px">
+      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-triangle-exclamation"></i></div>Category Gap Rows</div><div class="kpi-value gradient-text" id="cgGapRows">-</div><div class="kpi-sub">store-month gaps</div></div>
+      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Affected Stores</div><div class="kpi-value gradient-text" id="cgAffectedStores">-</div><div class="kpi-sub">stores with any gap</div></div>
+      <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-circle-check"></i></div>Complete Stores</div><div class="kpi-value" id="cgCompleteStores">-</div><div class="kpi-sub">complete for selected period</div></div>
+      <div class="kpi k-pct"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-percent"></i></div>Category Completion</div><div class="kpi-value" id="cgCompletion">-</div><div class="kpi-sub">complete store-months / expected</div></div>
+      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-calendar"></i></div>Gap Months</div><div class="kpi-value gradient-text" id="cgGapMonths">-</div><div class="kpi-sub">months with category gaps</div></div>
+    </div>
+
+    <div class="table-card" style="margin-top:24px">
+      <div class="table-header">
+        <div class="table-title"><i class="fa fa-chart-column"></i> Daily Sales Gap Metrics</div>
+        <div class="table-date">Separate from Category Sales gaps</div>
+      </div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:14px">
       <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-calendar-check"></i></div>Expected Store-Days</div><div class="kpi-value gradient-text" id="dgExpected">-</div><div class="kpi-sub">January to yesterday</div></div>
       <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-circle-check"></i></div>Reported Store-Days</div><div class="kpi-value gradient-text" id="dgReported">-</div><div class="kpi-sub">with Daily Sales data</div></div>
       <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-triangle-exclamation"></i></div>Gap Days</div><div class="kpi-value" id="dgGapDays">-</div><div class="kpi-sub">missing store-days</div></div>
@@ -3167,6 +3300,58 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
       </div>
     </div>
 
+    <div class="kpi-grid" style="margin-top:24px">
+      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-clipboard-list"></i></div>Inventory Expected</div><div class="kpi-value gradient-text" id="igExpected">-</div><div class="kpi-sub">February 2 to today</div></div>
+      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-circle-check"></i></div>Inventory Reported</div><div class="kpi-value gradient-text" id="igReported">-</div><div class="kpi-sub">with InventoryLogs data</div></div>
+      <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-triangle-exclamation"></i></div>Inventory Gap Days</div><div class="kpi-value" id="igGapDays">-</div><div class="kpi-sub">missing store-days</div></div>
+      <div class="kpi k-pct"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-percent"></i></div>Inventory Completion</div><div class="kpi-value" id="igCompletion">-</div><div class="kpi-sub">reported / expected</div></div>
+      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Inventory Store-Months</div><div class="kpi-value gradient-text" id="igStoreMonths">-</div><div class="kpi-sub" id="igStoreMonthsSub">gap vs complete</div></div>
+    </div>
+
+    <div class="chart-card" style="margin-top:24px">
+      <div class="chart-title">
+        <i class="fa fa-chart-column"></i> Inventory Logs Gap
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em" id="igChartInfo">February 2 to today</span>
+      </div>
+      <div style="position:relative;height:340px">
+        <canvas id="inventoryGapChart"></canvas>
+      </div>
+    </div>
+
+    <div class="charts-grid" style="margin-top:24px">
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-triangle-exclamation"></i> Inventory Logs Stores With Gap</div>
+          <div class="table-date" id="igGapInfo">-</div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Gap Days</th><th style="text-align:center">Completion</th>
+              </tr>
+            </thead>
+            <tbody id="igGapBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-circle-check"></i> Inventory Logs Complete Stores</div>
+          <div class="table-date" id="igCompleteInfo">-</div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th><th>Area</th><th style="text-align:center">Store ID</th><th>Store Name</th><th style="text-align:center">Expected</th><th style="text-align:center">Reported</th><th style="text-align:center">Completion</th><th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="igCompleteBody"><tr><td colspan="8" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div><!-- /tab-gaps -->
 
   <!--  STORE NOTES TAB  -->
@@ -3582,10 +3767,11 @@ let cBreakdownData = []; // raw filtered data for breakdown filtering
 let cSubDepsForBreakdown = []; // list of sub-depts grouped by category
 
 // Data gaps monitoring state
-let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
+let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] }, inventory: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
 let gSort = { key: 'monthKey', dir: 'desc', type: 'string' };
 let gCompleteSort = { key: 'area', dir: 'asc', type: 'string' };
 let dailyGapChartInst = null;
+let inventoryGapChartInst = null;
 
 // Daily sort state
 let dailyRowsCache = [];
@@ -5497,14 +5683,17 @@ async function applyGapsFilters() {
   if (store !== 'ALL') params.set('store', store);
 
   try {
-    const [categoryRes, dailyRes] = await Promise.all([
+    const [categoryRes, dailyRes, inventoryRes] = await Promise.all([
       fetch('/api/data-gaps?' + params),
-      fetch('/api/daily-sales-gaps?' + params)
+      fetch('/api/daily-sales-gaps?' + params),
+      fetch('/api/inventory-log-gaps?' + params)
     ]);
     const categoryJson = await categoryRes.json();
     const dailyJson = await dailyRes.json();
+    const inventoryJson = await inventoryRes.json();
     if (!categoryJson.success) throw new Error(categoryJson.error);
     if (!dailyJson.success) throw new Error(dailyJson.error);
+    if (!inventoryJson.success) throw new Error(inventoryJson.error);
 
     gState.rows = categoryJson.gapRows || categoryJson.rows || [];
     gState.completeRows = categoryJson.completeRows || [];
@@ -5514,12 +5703,20 @@ async function applyGapsFilters() {
       gapRows: dailyJson.gapRows || [],
       completeRows: dailyJson.completeRows || []
     };
+    gState.inventory = {
+      summary: inventoryJson.summary || {},
+      monthly: inventoryJson.monthly || [],
+      gapRows: inventoryJson.gapRows || [],
+      completeRows: inventoryJson.completeRows || []
+    };
 
     renderGapsTable(sortRows(gState.rows, gSort), 'gMonitorBody', 'gap');
     renderGapsTable(sortRows(categoryCompleteStores(), gCompleteSort), 'gCompleteBody', 'complete');
+    renderCategoryGapKpis();
     updateSortHeaders('gMonitorBody', gSort);
     updateSortHeaders('gCompleteBody', gCompleteSort);
     renderDailyGapSection();
+    renderInventoryGapSection();
 
     const parts = [];
     if (month !== 'ALL') parts.push(selectedOptionText('gMonthFilter'));
@@ -5527,7 +5724,7 @@ async function applyGapsFilters() {
     if (store !== 'ALL') parts.push(store);
     const filterText = parts.length ? parts.join(' - ') : 'All months';
 
-    document.getElementById('gRecordsCount').innerHTML = '<span>' + gState.rows.length + '</span> category gap - <span>' + categoryCompleteStores().length + '</span> complete stores - <span>' + (gState.daily.summary.totalGapDays || 0) + '</span> daily gap days';
+    document.getElementById('gRecordsCount').innerHTML = '<span>' + gState.rows.length + '</span> category gap - <span>' + categoryCompleteStores().length + '</span> complete stores - <span>' + (gState.daily.summary.totalGapDays || 0) + '</span> daily gap days - <span>' + (gState.inventory.summary.totalGapDays || 0) + '</span> inventory gap days';
     document.getElementById('gMonitorInfo').textContent = gState.rows.length ? (gState.rows.length + ' store-month gap' + (gState.rows.length !== 1 ? 's' : '') + ' - ' + filterText) : 'No category gaps - ' + filterText;
     document.getElementById('gCompleteInfo').textContent = categoryCompleteStores().length + ' complete store' + (categoryCompleteStores().length !== 1 ? 's' : '') + ' - ' + filterText;
   } catch(e) {
@@ -5544,6 +5741,24 @@ function clientCompactKey(value) {
   return clientNormalizeKey(value).replace(/[^a-z0-9]/g, '');
 }
 
+function renderCategoryGapKpis() {
+  const gapRows = gState.rows || [];
+  const completeRows = gState.completeRows || [];
+  const completeStores = categoryCompleteStores();
+  const affectedStores = new Set(gapRows.map(categoryStoreKey));
+  const gapMonths = new Set(gapRows.map(r => r.monthKey || r.month).filter(Boolean));
+  const totalStoreMonths = gapRows.length + completeRows.length;
+  const completionPct = totalStoreMonths ? ((completeRows.length / totalStoreMonths) * 100) : 0;
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  setText('cgGapRows', gapRows.length.toLocaleString('en-PH'));
+  setText('cgAffectedStores', affectedStores.size.toLocaleString('en-PH'));
+  setText('cgCompleteStores', completeStores.length.toLocaleString('en-PH'));
+  setText('cgCompletion', completionPct.toFixed(2) + '%');
+  setText('cgGapMonths', gapMonths.size.toLocaleString('en-PH'));
+}
 function categoryStoreKey(row) {
   return clientNormalizeKey(row.area) + '|' + clientNormalizeKey(row.storeId) + '|' + clientCompactKey(row.storeName);
 }
@@ -5612,6 +5827,49 @@ function renderDailyGapSection() {
   renderDailyRows(gState.daily.completeRows || [], 'dgCompleteBody', false);
 }
 
+function renderInventoryGapSection() {
+  const summary = gState.inventory.summary || {};
+  document.getElementById('igExpected').textContent = (summary.totalExpectedStoreDays || 0).toLocaleString('en-PH');
+  document.getElementById('igReported').textContent = (summary.totalReportedStoreDays || 0).toLocaleString('en-PH');
+  document.getElementById('igGapDays').textContent = (summary.totalGapDays || 0).toLocaleString('en-PH');
+  document.getElementById('igCompletion').textContent = (summary.completionPct || 0).toFixed(2) + '%';
+  document.getElementById('igStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
+  document.getElementById('igStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap - ' + (summary.completeStoreMonths || 0) + ' complete';
+  document.getElementById('igChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'February 2 to today';
+  document.getElementById('igGapInfo').textContent = (gState.inventory.gapRows || []).length + ' store-months with gaps';
+  document.getElementById('igCompleteInfo').textContent = (gState.inventory.completeRows || []).length + ' complete store-months';
+  renderInventoryGapChart(gState.inventory.monthly || []);
+  renderDailyRows(gState.inventory.gapRows || [], 'igGapBody', true);
+  renderDailyRows(gState.inventory.completeRows || [], 'igCompleteBody', false);
+}
+
+function renderInventoryGapChart(monthly) {
+  const canvas = document.getElementById('inventoryGapChart');
+  if (!canvas) return;
+  if (inventoryGapChartInst) inventoryGapChartInst.destroy();
+  const palette = chartPalette();
+  inventoryGapChartInst = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: monthly.map(r => r.month),
+      datasets: [
+        { label: 'Gap Days', data: monthly.map(r => r.gapDays), backgroundColor: '#f59e0b', borderRadius: 6, yAxisID: 'y' },
+        { label: 'Completion %', data: monthly.map(r => r.completionPct), type: 'line', borderColor: '#10b981', backgroundColor: '#10b981', tension: 0.35, pointRadius: 3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: { legend: { labels: { color: palette.muted, font: { family: "'Inter'", size: 11 } } } },
+      scales: {
+        x: { grid: { color: palette.gridSoft }, ticks: { color: palette.muted, font: { family: "'Inter'", size: 10.5, weight: '600' } } },
+        y: { beginAtZero: true, grid: { color: palette.grid }, ticks: { color: palette.muted, font: { family: "'JetBrains Mono'", size: 10.5 } }, title: { display: true, text: 'Gap Days', color: palette.muted } },
+        y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { color: palette.muted, callback: v => v + '%' }, title: { display: true, text: 'Completion %', color: palette.muted } }
+      }
+    }
+  });
+}
 function renderDailyRows(rows, tbodyId, isGap) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;

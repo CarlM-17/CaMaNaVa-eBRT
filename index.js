@@ -305,6 +305,7 @@ async function getCategoryData(sheets) {
     const salesLY   = parseNum(r[7]);
     const category  = (r[8] || '').trim();
     if (!monthRaw && !storeCode && !category && !subDepName) continue;
+    if (normalizeKey(monthRaw) === 'month' || normalizeKey(storeCode) === 'store code' || normalizeKey(storeName) === 'store name') continue;
     data.push({ month, monthRaw, monthKey: monthKeyValue, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category });
   }
   categoryCache = data;

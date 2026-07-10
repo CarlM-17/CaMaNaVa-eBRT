@@ -338,8 +338,21 @@ function maxISODate(a, b) {
 function storeAuditStartDate(store, defaultStart) {
   const name = normalizeKey(store && store.storeName);
   const storeId = normalizeKey(store && store.storeId);
-  if (storeId === '867' || name.includes('congressional') || name.includes('cogressional')) return maxISODate(defaultStart, '2026-06-23');
+  if (storeId === '867' || name.includes('congressional') || name.includes('cogressional')) return maxISODate(defaultStart, '2026-06-24');
   return defaultStart;
+}
+
+function isCongressionalStore(store) {
+  const name = normalizeKey(store && store.storeName);
+  const storeId = normalizeKey(store && store.storeId);
+  return storeId === '867' || name.includes('congressional') || name.includes('cogressional');
+}
+
+function monthEndsBeforeStoreOpened(monthKey, store) {
+  if (!isCongressionalStore(store) || !/^\d{4}-\d{2}$/.test(monthKey || '')) return false;
+  const [year, month] = monthKey.split('-').map(n => parseInt(n, 10));
+  const monthEnd = year + '-' + String(month).padStart(2, '0') + '-' + String(new Date(year, month, 0).getDate()).padStart(2, '0');
+  return monthEnd < '2026-06-24';
 }
 
 function daysInMonthWindow(year, monthIndex, startDate, endDate) {
@@ -529,6 +542,7 @@ function buildCategoryMonitorStatus(categoryRows, masterStores, filters = {}) {
         }
       });
     expectedStores.forEach(s => {
+      if (monthEndsBeforeStoreOpened(m.key, s)) return;
       const hasData = actual.has('id:' + normalizeKey(s.storeId)) || actual.has('name:' + normalizeKey(s.storeName)) || actual.has('cname:' + compactKey(s.storeName));
       if (!hasData) {
         gapRows.push({
@@ -1219,7 +1233,6 @@ app.get('/api/inventory-log-gaps', async (req, res) => {
       startDate: now.getFullYear() + '-02-02',
       includeToday: true,
       label: 'Inventory Logs data',
-      applyStoreOpenDate: false,
     });
     res.json({ success: true, ...result });
   } catch (err) {

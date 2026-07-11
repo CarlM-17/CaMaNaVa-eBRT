@@ -12,7 +12,7 @@ const SHEET_ID = process.env.SHEET_ID || '1PhRyLx2viByS1J-dOWWPwSmAZwNwzzaM6ATmb
 const SHEET_NAME = 'DailySales';
 const DATA_RANGE = `${SHEET_NAME}!A23:R`;
 const STORE_LIST_RANGE = 'ListOfStores!A:E';
-const CATEGORY_RANGE = 'CategorySales!A:I';
+const CATEGORY_RANGE = 'CategorySales!A:J';
 const STORE_NOTES_RANGE = 'StoreNotes!A:M';
 const ISSUES_RANGE = 'StoreOpsIssuesAndConcerns!A5:R';
 const USERS_RANGE = 'user!B2:E';
@@ -492,15 +492,48 @@ async function getCategoryData(sheets) {
     const sales     = parseNum(r[6]);
     const salesLY   = parseNum(r[7]);
     const category  = (r[8] || '').trim();
+    const lastUpdate = (r[9] || '').trim();
     if (!monthRaw && !storeCode && !category && !subDepName) continue;
     if (normalizeKey(monthRaw) === 'month' || normalizeKey(storeCode) === 'store code' || normalizeKey(storeName) === 'store name') continue;
-    data.push({ month, monthRaw, monthKey: monthKeyValue, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category });
+    data.push({ month, monthRaw, monthKey: monthKeyValue, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category, lastUpdate });
   }
   categoryCache = data;
   categoryCacheTime = now;
   return categoryCache;
 }
 
+function lastUpdateSortValue(value) {
+  const parsed = parseDateFlexible(value);
+  if (parsed) return parsed.getTime();
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+function buildCategoryLastUpdateRows(categoryRows, filters = {}) {
+  const selectedMonthKey = filters.monthKey || '';
+  const area = filters.area || 'ALL';
+  const store = filters.store || 'ALL';
+  let rows = categoryRows;
+  if (selectedMonthKey) rows = rows.filter(r => r.monthKey === selectedMonthKey);
+  if (area && area !== 'ALL') rows = rows.filter(r => r.area === area);
+  if (store && store !== 'ALL') rows = rows.filter(r => r.storeName === store);
+
+  const map = new Map();
+  rows.forEach(r => {
+    if (!r.storeName && !r.storeCode) return;
+    const key = (r.storeCode ? 'id:' + normalizeKey(r.storeCode) : 'name:' + compactKey(r.storeName));
+    const current = map.get(key);
+    const candidate = {
+      storeName: r.storeName || r.storeCode || '',
+      sales: r.sales || 0,
+      salesYA: r.salesLY || 0,
+      lastUpdate: r.lastUpdate || '',
+      lastUpdateTs: lastUpdateSortValue(r.lastUpdate),
+    };
+    if (!current || candidate.lastUpdateTs > current.lastUpdateTs) map.set(key, candidate);
+  });
+  return [...map.values()].sort((a, b) => (b.lastUpdateTs || 0) - (a.lastUpdateTs || 0) || (a.storeName || '').localeCompare(b.storeName || ''));
+}
 function buildCategoryMonitorRows(categoryRows, masterStores, filters = {}) {
   return buildCategoryMonitorStatus(categoryRows, masterStores, filters).gapRows;
 }
@@ -1175,12 +1208,14 @@ app.get('/api/data-gaps', async (req, res) => {
     const { month, area, store } = req.query;
     const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
     const status = buildCategoryMonitorStatus(data, masterStores, { monthKey: selectedMonthKey, area, store });
+    const lastUpdateRows = buildCategoryLastUpdateRows(data, { monthKey: selectedMonthKey, area, store });
 
     res.json({
       success: true,
       rows: status.gapRows,
       gapRows: status.gapRows,
       completeRows: status.completeRows,
+      lastUpdateRows,
       count: status.gapRows.length,
       completeCount: status.completeRows.length,
     });
@@ -3219,6 +3254,33 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
         </div>
       </div>
 
+      <div class="table-card" style="margin-top:24px;grid-column:1 / -1">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-clock-rotate-left"></i> Category Sales Last Update</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <button class="export-btn" onclick="exportCategoryLastUpdateToExcel()">
+              <i class="fa fa-file-excel"></i> Export Excel
+            </button>
+            <div class="table-date" id="gLastUpdateInfo">-</div>
+          </div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Store Name</th>
+                <th style="text-align:right">Sales</th>
+                <th style="text-align:right">SalesYA</th>
+                <th>Last Update</th>
+              </tr>
+            </thead>
+            <tbody id="gLastUpdateBody">
+              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-circle-check"></i> Category Sales Complete</div>
@@ -3786,7 +3848,7 @@ let cBreakdownData = []; // raw filtered data for breakdown filtering
 let cSubDepsForBreakdown = []; // list of sub-depts grouped by category
 
 // Data gaps monitoring state
-let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] }, inventory: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
+let gState = { initialized: false, filters: { months: [], areas: [], stores: [] }, rows: [], completeRows: [], lastUpdateRows: [], daily: { summary: {}, monthly: [], gapRows: [], completeRows: [] }, inventory: { summary: {}, monthly: [], gapRows: [], completeRows: [] } };
 let gSort = { key: 'monthKey', dir: 'desc', type: 'string' };
 let gCompleteSort = { key: 'area', dir: 'asc', type: 'string' };
 let dailyGapChartInst = null;
@@ -5716,6 +5778,7 @@ async function applyGapsFilters() {
 
     gState.rows = categoryJson.gapRows || categoryJson.rows || [];
     gState.completeRows = categoryJson.completeRows || [];
+    gState.lastUpdateRows = categoryJson.lastUpdateRows || [];
     gState.daily = {
       summary: dailyJson.summary || {},
       monthly: dailyJson.monthly || [],
@@ -5731,6 +5794,7 @@ async function applyGapsFilters() {
 
     renderGapsTable(sortRows(gState.rows, gSort), 'gMonitorBody', 'gap');
     renderGapsTable(sortRows(categoryCompleteStores(), gCompleteSort), 'gCompleteBody', 'complete');
+    renderCategoryLastUpdateTable(gState.lastUpdateRows || []);
     renderCategoryGapKpis();
     updateSortHeaders('gMonitorBody', gSort);
     updateSortHeaders('gCompleteBody', gCompleteSort);
@@ -5760,6 +5824,52 @@ function clientCompactKey(value) {
   return clientNormalizeKey(value).replace(/[^a-z0-9]/g, '');
 }
 
+function renderCategoryLastUpdateTable(rows) {
+  const tbody = document.getElementById('gLastUpdateBody');
+  const info = document.getElementById('gLastUpdateInfo');
+  if (!tbody) return;
+  if (info) info.textContent = (rows || []).length + ' unique store' + ((rows || []).length !== 1 ? 's' : '');
+  if (!rows || !rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No Category Sales update data found</p></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => '<tr>' +
+    '<td><div class="store-name">' + escHtml(r.storeName || '-') + '</div></td>' +
+    '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(r.sales || 0) + '</span></td>' +
+    '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(r.salesYA || 0) + '</span></td>' +
+    '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '-') + '</span></td>' +
+  '</tr>').join('');
+}
+function exportCategoryLastUpdateToExcel() {
+  const rows = gState.lastUpdateRows || [];
+  if (!rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+  const data = rows.map(r => ({
+    'Store Name': r.storeName || '',
+    'Sales': r.sales || 0,
+    'SalesYA': r.salesYA || 0,
+    'Last Update': r.lastUpdate || ''
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{ wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      fill: { fgColor: { rgb: '166534' } },
+      font: { color: { rgb: 'FFFFFF' }, bold: true },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (ws[addr]) ws[addr].s = headerStyle;
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, ws, 'Category Last Update');
+  XLSX.writeFile(wb, 'CaMaNaVa_Category_Last_Update_' + issueExportDateTag() + '.xlsx');
+}
 function renderCategoryGapKpis() {
   const gapRows = gState.rows || [];
   const completeRows = gState.completeRows || [];
@@ -6024,6 +6134,7 @@ function sortGapsComplete(key, type) {
   else gCompleteSort = { key, dir: 'asc', type };
   gCompleteSort.type = type;
   renderGapsTable(sortRows(categoryCompleteStores(), gCompleteSort), 'gCompleteBody', 'complete');
+    renderCategoryLastUpdateTable(gState.lastUpdateRows || []);
   updateSortHeaders('gCompleteBody', gCompleteSort);
 }
 

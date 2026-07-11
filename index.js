@@ -4766,7 +4766,7 @@ function exportDetailToExcel() {
     'Day': r.day || '',
     'Day YA': r.dayYA || '',
     'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Area': r.area || '',
     'Sales': r.sales || 0,
     'Sales LY': r.salesLY || 0,
@@ -5870,6 +5870,10 @@ function clientCompactKey(value) {
   return clientNormalizeKey(value).replace(/[^a-z0-9]/g, '');
 }
 
+function clientProperCase(value) {
+  return String(value || '').toLowerCase().replace(/\\b([a-z])/g, m => m.toUpperCase());
+}
+
 function renderCategoryLastUpdateTable(rows) {
   const tbody = document.getElementById('gLastUpdateBody');
   const info = document.getElementById('gLastUpdateInfo');
@@ -5889,7 +5893,7 @@ function renderCategoryLastUpdateTable(rows) {
     const dailyDiffColor = Number(dailyDiffPct || 0) >= 0 ? 'var(--good)' : 'var(--bad)';
     const dailyDiffText = dailyDiffPct === null || dailyDiffPct === undefined || dailyDiffPct === '' ? '-' : Number(dailyDiffPct).toFixed(2) + '%';
     return '<tr>' +
-      '<td><div class="store-name">' + escHtml(r.storeName || '-') + '</div></td>' +
+      '<td><div class="store-name">' + escHtml(clientProperCase(r.storeName || '-')) + '</div></td>' +
       '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(sales) + '</span></td>' +
       '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(salesYA) + '</span></td>' +
       '<td style="text-align:right"><span class="num num-bold" style="color:' + diffColor + '">' + diffPct.toFixed(2) + '%</span></td>' +
@@ -5911,7 +5915,7 @@ function exportCategoryLastUpdateToExcel() {
     const diffValue = sales - salesYA;
     const diffPct = salesYA ? (diffValue / salesYA) * 100 : (sales ? 100 : 0);
     return {
-      'Store Name': r.storeName || '',
+      'Store Name': clientProperCase(r.storeName || ''),
       'Sales': sales,
       'SalesYA': salesYA,
       'Sales Diff %': Number(diffPct.toFixed(2)),
@@ -6154,7 +6158,7 @@ function exportStoreDayGapTable(source, mode) {
   const data = summaryRows.map(r => ({
     'Area': r.area || '',
     'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Expected': r.expectedDays || 0,
     'Reported': r.reportedDays || 0,
     'Gap Days': r.gapDays || 0,
@@ -6218,13 +6222,13 @@ function exportGapsToExcel(mode) {
   const data = sortRows(rows, sortState).map(r => isComplete ? ({
     'Area': r.area || '',
     'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Remarks': r.remarks || ''
   }) : ({
     'Month': r.month || '',
     'Area': r.area || '',
     'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Remarks': r.remarks || ''
   }));
 
@@ -6302,7 +6306,7 @@ function exportCategoryToExcel() {
 
   const data = cDetailRowsCache.map(r => ({
     'Category': r.category || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Area': r.area || '',
     'Sub-Department': r.subDepName || '',
     'Sales': r.sales || 0,
@@ -7265,7 +7269,7 @@ function writeIssueExcelFile(rows, sheetName, filename, columns) {
 function exportHighPriorityNotDoneToExcel() {
   const rows = highPriorityNotDoneRows(iState.rows).map(r => ({
     'Date': r.date || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Issue Description': r.issueDescription || '',
     'Impact': r.impactLevel || '',
     'Status': r.status || '',
@@ -7284,7 +7288,7 @@ function exportIssuesDetailToExcel() {
   const rows = sortRows(iState.rows, iState.sort).map(r => ({
     'Area': r.area || '',
     'Store ID': r.storeId || '',
-    'Store Name': r.storeName || '',
+    'Store Name': clientProperCase(r.storeName || ''),
     'Date': r.date || '',
     'Reported By': r.reportedBy || '',
     'Issue Category': r.issueCategory || '',

@@ -509,7 +509,39 @@ function lastUpdateSortValue(value) {
   return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
-function buildCategoryLastUpdateRows(categoryRows, filters = {}) {
+function buildDailySalesDiffPctLookup(salesRows, filters = {}) {
+  const selectedMonthKey = filters.monthKey || '';
+  const area = filters.area || 'ALL';
+  const store = filters.store || 'ALL';
+  let rows = salesRows || [];
+  if (selectedMonthKey) rows = rows.filter(r => monthKey(r.date) === selectedMonthKey);
+  if (area && area !== 'ALL') rows = rows.filter(r => r.area === area);
+  if (store && store !== 'ALL') rows = rows.filter(r => r.storeName === store);
+
+  const map = new Map();
+  rows.forEach(r => {
+    if (!r.storeName && !r.storeId) return;
+    const keys = [];
+    if (r.storeId) keys.push('id:' + normalizeKey(r.storeId));
+    if (r.storeName) keys.push('name:' + compactKey(r.storeName));
+    const key = keys[0];
+    const current = map.get(key) || { sales: 0, salesLY: 0, keys };
+    current.sales += Number(r.sales || 0);
+    current.salesLY += Number(r.salesLY || 0);
+    keys.forEach(k => { if (!current.keys.includes(k)) current.keys.push(k); });
+    map.set(key, current);
+  });
+
+  const lookup = new Map();
+  map.forEach(v => {
+    const diffValue = v.sales - v.salesLY;
+    const diffPct = v.salesLY ? (diffValue / v.salesLY) * 100 : (v.sales ? 100 : null);
+    v.keys.forEach(k => lookup.set(k, diffPct === null ? null : parseFloat(diffPct.toFixed(2))));
+  });
+  return lookup;
+}
+
+function buildCategoryLastUpdateRows(categoryRows, filters = {}, salesRows = []) {
   const selectedMonthKey = filters.monthKey || '';
   const area = filters.area || 'ALL';
   const store = filters.store || 'ALL';
@@ -518,19 +550,24 @@ function buildCategoryLastUpdateRows(categoryRows, filters = {}) {
   if (area && area !== 'ALL') rows = rows.filter(r => r.area === area);
   if (store && store !== 'ALL') rows = rows.filter(r => r.storeName === store);
 
+  const dailyDiffLookup = buildDailySalesDiffPctLookup(salesRows, filters);
   const map = new Map();
   rows.forEach(r => {
     if (!r.storeName && !r.storeCode) return;
     const key = (r.storeCode ? 'id:' + normalizeKey(r.storeCode) : 'name:' + compactKey(r.storeName));
+    const nameKey = r.storeName ? 'name:' + compactKey(r.storeName) : '';
     const current = map.get(key) || {
       storeName: r.storeName || r.storeCode || '',
       sales: 0,
       salesYA: 0,
+      dailySalesDiffPct: dailyDiffLookup.has(key) ? dailyDiffLookup.get(key) : (nameKey && dailyDiffLookup.has(nameKey) ? dailyDiffLookup.get(nameKey) : null),
       lastUpdate: '',
       lastUpdateTs: 0,
     };
     current.sales += Number(r.sales || 0);
     current.salesYA += Number(r.salesLY || 0);
+    const dsDiff = dailyDiffLookup.has(key) ? dailyDiffLookup.get(key) : (nameKey && dailyDiffLookup.has(nameKey) ? dailyDiffLookup.get(nameKey) : null);
+    if (dsDiff !== null && dsDiff !== undefined) current.dailySalesDiffPct = dsDiff;
     const updateTs = lastUpdateSortValue(r.lastUpdate);
     if (updateTs >= (current.lastUpdateTs || 0)) {
       current.lastUpdate = r.lastUpdate || current.lastUpdate || '';
@@ -1207,14 +1244,15 @@ app.get('/api/data-gaps', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
-    let [data, masterStores] = await Promise.all([getCategoryData(sheets), getMasterStoreList(sheets)]);
+    let [data, masterStores, dailySalesRows] = await Promise.all([getCategoryData(sheets), getMasterStoreList(sheets), getSalesData(sheets)]);
     data = scopeRowsByArea(data, req.user);
     masterStores = scopeRowsByArea(masterStores, req.user);
+    dailySalesRows = scopeRowsByArea(dailySalesRows, req.user);
 
     const { month, area, store } = req.query;
     const selectedMonthKey = month && month !== 'ALL' ? categoryMonthKey(month) : '';
     const status = buildCategoryMonitorStatus(data, masterStores, { monthKey: selectedMonthKey, area, store });
-    const lastUpdateRows = buildCategoryLastUpdateRows(data, { monthKey: selectedMonthKey, area, store });
+    const lastUpdateRows = buildCategoryLastUpdateRows(data, { monthKey: selectedMonthKey, area, store }, dailySalesRows);
 
     res.json({
       success: true,
@@ -3280,7 +3318,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
               </tr>
             </thead>
             <tbody id="gCompleteBody">
-              <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
             </tbody>
           </table>
         </div>
@@ -3306,11 +3344,12 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
                 <th style="text-align:right">SalesYA</th>
                 <th style="text-align:right">Sales Diff %</th>
                 <th style="text-align:right">Diff Value</th>
+                <th style="text-align:right">Diff % (DS)</th>
                 <th>Last Update</th>
               </tr>
             </thead>
             <tbody id="gLastUpdateBody">
-              <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+              <tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
             </tbody>
           </table>
         </div>
@@ -5837,7 +5876,7 @@ function renderCategoryLastUpdateTable(rows) {
   if (!tbody) return;
   if (info) info.textContent = (rows || []).length + ' unique store' + ((rows || []).length !== 1 ? 's' : '');
   if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No Category Sales update data found</p></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No Category Sales update data found</p></td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
@@ -5846,12 +5885,16 @@ function renderCategoryLastUpdateTable(rows) {
     const diffValue = sales - salesYA;
     const diffPct = salesYA ? (diffValue / salesYA) * 100 : (sales ? 100 : 0);
     const diffColor = diffValue >= 0 ? 'var(--good)' : 'var(--bad)';
+    const dailyDiffPct = r.dailySalesDiffPct;
+    const dailyDiffColor = Number(dailyDiffPct || 0) >= 0 ? 'var(--good)' : 'var(--bad)';
+    const dailyDiffText = dailyDiffPct === null || dailyDiffPct === undefined || dailyDiffPct === '' ? '-' : Number(dailyDiffPct).toFixed(2) + '%';
     return '<tr>' +
       '<td><div class="store-name">' + escHtml(r.storeName || '-') + '</div></td>' +
       '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(sales) + '</span></td>' +
       '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(salesYA) + '</span></td>' +
       '<td style="text-align:right"><span class="num num-bold" style="color:' + diffColor + '">' + diffPct.toFixed(2) + '%</span></td>' +
       '<td style="text-align:right"><span class="num num-bold" style="color:' + diffColor + '">' + fmtFull(diffValue) + '</span></td>' +
+      '<td style="text-align:right"><span class="num num-bold" style="color:' + dailyDiffColor + '">' + dailyDiffText + '</span></td>' +
       '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '-') + '</span></td>' +
     '</tr>';
   }).join('');
@@ -5873,12 +5916,13 @@ function exportCategoryLastUpdateToExcel() {
       'SalesYA': salesYA,
       'Sales Diff %': Number(diffPct.toFixed(2)),
       'Diff Value': diffValue,
+      'Diff % (DS)': r.dailySalesDiffPct === null || r.dailySalesDiffPct === undefined ? '' : Number(r.dailySalesDiffPct),
       'Last Update': r.lastUpdate || ''
     };
   });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{ wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
+  ws['!cols'] = [{ wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
   if (ws['!ref']) {
     const range = XLSX.utils.decode_range(ws['!ref']);
     const headerStyle = {

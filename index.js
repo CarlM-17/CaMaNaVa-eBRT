@@ -522,15 +522,21 @@ function buildCategoryLastUpdateRows(categoryRows, filters = {}) {
   rows.forEach(r => {
     if (!r.storeName && !r.storeCode) return;
     const key = (r.storeCode ? 'id:' + normalizeKey(r.storeCode) : 'name:' + compactKey(r.storeName));
-    const current = map.get(key);
-    const candidate = {
+    const current = map.get(key) || {
       storeName: r.storeName || r.storeCode || '',
-      sales: r.sales || 0,
-      salesYA: r.salesLY || 0,
-      lastUpdate: r.lastUpdate || '',
-      lastUpdateTs: lastUpdateSortValue(r.lastUpdate),
+      sales: 0,
+      salesYA: 0,
+      lastUpdate: '',
+      lastUpdateTs: 0,
     };
-    if (!current || candidate.lastUpdateTs > current.lastUpdateTs) map.set(key, candidate);
+    current.sales += Number(r.sales || 0);
+    current.salesYA += Number(r.salesLY || 0);
+    const updateTs = lastUpdateSortValue(r.lastUpdate);
+    if (updateTs >= (current.lastUpdateTs || 0)) {
+      current.lastUpdate = r.lastUpdate || current.lastUpdate || '';
+      current.lastUpdateTs = updateTs;
+    }
+    map.set(key, current);
   });
   return [...map.values()].sort((a, b) => (b.lastUpdateTs || 0) - (a.lastUpdateTs || 0) || (a.storeName || '').localeCompare(b.storeName || ''));
 }
@@ -3253,35 +3259,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
           </table>
         </div>
       </div>
-
-      <div class="table-card" style="margin-top:24px;grid-column:1 / -1">
-        <div class="table-header" style="gap:14px;flex-wrap:wrap">
-          <div class="table-title"><i class="fa fa-clock-rotate-left"></i> Category Sales Last Update</div>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-            <button class="export-btn" onclick="exportCategoryLastUpdateToExcel()">
-              <i class="fa fa-file-excel"></i> Export Excel
-            </button>
-            <div class="table-date" id="gLastUpdateInfo">-</div>
-          </div>
-        </div>
-        <div class="table-wrap" style="max-height:520px">
-          <table>
-            <thead>
-              <tr>
-                <th>Store Name</th>
-                <th style="text-align:right">Sales</th>
-                <th style="text-align:right">SalesYA</th>
-                <th>Last Update</th>
-              </tr>
-            </thead>
-            <tbody id="gLastUpdateBody">
-              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="table-card">
+<div class="table-card">
         <div class="table-header" style="gap:14px;flex-wrap:wrap">
           <div class="table-title"><i class="fa fa-circle-check"></i> Category Sales Complete</div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
@@ -3308,6 +3286,33 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
         </div>
       </div>
     </div>
+
+    <div class="table-card" style="margin-top:24px;grid-column:1 / -1">
+        <div class="table-header" style="gap:14px;flex-wrap:wrap">
+          <div class="table-title"><i class="fa fa-clock-rotate-left"></i> Category Sales Last Update</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+            <button class="export-btn" onclick="exportCategoryLastUpdateToExcel()">
+              <i class="fa fa-file-excel"></i> Export Excel
+            </button>
+            <div class="table-date" id="gLastUpdateInfo">-</div>
+          </div>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+          <table>
+            <thead>
+              <tr>
+                <th>Store Name</th>
+                <th style="text-align:right">Sales</th>
+                <th style="text-align:right">SalesYA</th>
+                <th>Last Update</th>
+              </tr>
+            </thead>
+            <tbody id="gLastUpdateBody">
+              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
     <div class="kpi-grid" style="margin-top:24px">
       <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-triangle-exclamation"></i></div>Category Gap Rows</div><div class="kpi-value gradient-text" id="cgGapRows">-</div><div class="kpi-sub">store-month gaps</div></div>

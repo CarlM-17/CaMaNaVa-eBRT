@@ -3280,7 +3280,7 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
               </tr>
             </thead>
             <tbody id="gCompleteBody">
-              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+              <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
             </tbody>
           </table>
         </div>
@@ -3304,11 +3304,13 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
                 <th>Store Name</th>
                 <th style="text-align:right">Sales</th>
                 <th style="text-align:right">SalesYA</th>
+                <th style="text-align:right">Sales Diff %</th>
+                <th style="text-align:right">Diff Value</th>
                 <th>Last Update</th>
               </tr>
             </thead>
             <tbody id="gLastUpdateBody">
-              <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+              <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
             </tbody>
           </table>
         </div>
@@ -5835,15 +5837,24 @@ function renderCategoryLastUpdateTable(rows) {
   if (!tbody) return;
   if (info) info.textContent = (rows || []).length + ' unique store' + ((rows || []).length !== 1 ? 's' : '');
   if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No Category Sales update data found</p></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-magnifying-glass"></i></div><p>No Category Sales update data found</p></td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => '<tr>' +
-    '<td><div class="store-name">' + escHtml(r.storeName || '-') + '</div></td>' +
-    '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(r.sales || 0) + '</span></td>' +
-    '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(r.salesYA || 0) + '</span></td>' +
-    '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '-') + '</span></td>' +
-  '</tr>').join('');
+  tbody.innerHTML = rows.map(r => {
+    const sales = Number(r.sales || 0);
+    const salesYA = Number(r.salesYA || 0);
+    const diffValue = sales - salesYA;
+    const diffPct = salesYA ? (diffValue / salesYA) * 100 : (sales ? 100 : 0);
+    const diffColor = diffValue >= 0 ? 'var(--good)' : 'var(--bad)';
+    return '<tr>' +
+      '<td><div class="store-name">' + escHtml(r.storeName || '-') + '</div></td>' +
+      '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(sales) + '</span></td>' +
+      '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(salesYA) + '</span></td>' +
+      '<td style="text-align:right"><span class="num num-bold" style="color:' + diffColor + '">' + diffPct.toFixed(2) + '%</span></td>' +
+      '<td style="text-align:right"><span class="num num-bold" style="color:' + diffColor + '">' + fmtFull(diffValue) + '</span></td>' +
+      '<td><span class="timestamp-cell">' + (escHtml(r.lastUpdate) || '-') + '</span></td>' +
+    '</tr>';
+  }).join('');
 }
 function exportCategoryLastUpdateToExcel() {
   const rows = gState.lastUpdateRows || [];
@@ -5851,15 +5862,23 @@ function exportCategoryLastUpdateToExcel() {
     alert('No data to export with the current filters.');
     return;
   }
-  const data = rows.map(r => ({
-    'Store Name': r.storeName || '',
-    'Sales': r.sales || 0,
-    'SalesYA': r.salesYA || 0,
-    'Last Update': r.lastUpdate || ''
-  }));
+  const data = rows.map(r => {
+    const sales = Number(r.sales || 0);
+    const salesYA = Number(r.salesYA || 0);
+    const diffValue = sales - salesYA;
+    const diffPct = salesYA ? (diffValue / salesYA) * 100 : (sales ? 100 : 0);
+    return {
+      'Store Name': r.storeName || '',
+      'Sales': sales,
+      'SalesYA': salesYA,
+      'Sales Diff %': Number(diffPct.toFixed(2)),
+      'Diff Value': diffValue,
+      'Last Update': r.lastUpdate || ''
+    };
+  });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{ wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
+  ws['!cols'] = [{ wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
   if (ws['!ref']) {
     const range = XLSX.utils.decode_range(ws['!ref']);
     const headerStyle = {

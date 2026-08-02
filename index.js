@@ -201,13 +201,14 @@ function monthLabel(key) {
 }
 
 function cleanMonthText(value) {
-  return String(value || '')
+  const clean = String(value || '')
     .normalize('NFKC')
     .replace(/Â/g, ' ')
     .replace(/\u00a0/g, ' ')
     .replace(/\uFFFD/g, '')
     .replace(/[^\S\r\n]+/g, ' ')
     .trim();
+  return /[a-zA-Z0-9]/.test(clean) ? clean : '';
 }
 
 function categoryMonthKey(value) {
@@ -228,7 +229,7 @@ function categoryMonthKey(value) {
     const year = yearMatch ? yearMatch[1] : String(new Date().getFullYear());
     return year + '-' + String(monthMap[monthMatch[1]]).padStart(2, '0');
   }
-  return normalizeKey(clean);
+  return '';
 }
 
 function categoryMonthLabel(value, key) {
@@ -495,6 +496,7 @@ async function getCategoryData(sheets) {
     const lastUpdate = (r[9] || '').trim();
     if (!monthRaw && !storeCode && !category && !subDepName) continue;
     if (normalizeKey(monthRaw) === 'month' || normalizeKey(storeCode) === 'store code' || normalizeKey(storeName) === 'store name') continue;
+    if (!monthKeyValue) continue;
     data.push({ month, monthRaw, monthKey: monthKeyValue, area, storeCode, storeName, sdepCode, subDepName, sales, salesLY, category, lastUpdate });
   }
   categoryCache = data;
@@ -4470,18 +4472,18 @@ function renderWithoutJustification(rows, hasDateFilter) {
     const diffPct = salesLY ? (diffVal / salesLY) * 100 : 0;
     const pctCls = diffVal < 0 ? 'down' : 'up';
     const parameter = diffVal < 0 ? 'Declined vs Last Year' : 'Positive Growth 20%+ vs LY';
-    const pctText = salesLY ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : ' ';
+    const pctText = salesLY ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '�';
     return \`<tr>
       <td><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId || '')}</span></td>
       <td>
         <div class="store-cell">
           <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]})">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name">\${escHtml(r.storeName || ' ')}</div>
+            <div class="store-name">\${escHtml(r.storeName || '�')}</div>
           </div>
         </div>
       </td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area || ' ')}</span></td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area || '�')}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctText}</span></td>
@@ -6117,7 +6119,7 @@ function renderDailyGapSection() {
   document.getElementById('dgGapDays').textContent = (summary.totalGapDays || 0).toLocaleString('en-PH');
   document.getElementById('dgCompletion').textContent = (summary.completionPct || 0).toFixed(2) + '%';
   document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
-  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap   ' + (summary.completeStoreMonths || 0) + ' complete';
+  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
   document.getElementById('dgGapInfo').textContent = storeDaySummaryRows(gState.daily, 'gap').length + ' stores with gaps';
   document.getElementById('dgCompleteInfo').textContent = storeDaySummaryRows(gState.daily, 'complete').length + ' complete stores';

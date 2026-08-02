@@ -2817,6 +2817,34 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     </div>
   </div>
 
+  <!-- Stores Without Justification -->
+  <div class="missing-card" id="noJustificationCard" style="display:none">
+    <div class="missing-header">
+      <div class="missing-title">
+        <i class="fa fa-message-slash"></i>
+        Stores Without Justification
+        <span class="missing-count" id="noJustificationCount">0</span>
+      </div>
+      <div class="missing-sub">Declined vs LY or positive growth at 20% and above</div>
+    </div>
+    <div class="table-wrap">
+      <table class="missing-table">
+        <thead>
+          <tr>
+            <th>Store ID</th>
+            <th>Store Name</th>
+            <th>Area</th>
+            <th style="text-align:right">Sales</th>
+            <th style="text-align:right">Sales LY</th>
+            <th style="text-align:center">Diff %</th>
+            <th>Parameter</th>
+          </tr>
+        </thead>
+        <tbody id="noJustificationBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Average Daily Sales Charts -->
   <div class="charts-grid" style="margin-top:24px">
     <div class="chart-card">
@@ -4128,6 +4156,7 @@ async function applyFilters() {
     updateSortHeaders('mainTable', dailySort);
     renderCharts(rows);
     renderMissing(json.missing || [], !!date);
+    renderWithoutJustification(rows, !!date);
     renderAverages(); // independent of date filter
     setStatus('live', 'Live');
   } catch(e) {
@@ -4388,6 +4417,75 @@ function renderMissing(missing, hasDateFilter) {
       </td>
       <td><span style="font-size:13px;color:var(--text-2);font-weight:500">\${s.region || '—'}</span></td>
       <td><span class="remark-pill \${remarkCls}">\${s.remarks || '—'}</span></td>
+    </tr>\`;
+  }).join('');
+}
+
+function renderWithoutJustification(rows, hasDateFilter) {
+  const card = document.getElementById('noJustificationCard');
+  const body = document.getElementById('noJustificationBody');
+  const countEl = document.getElementById('noJustificationCount');
+  if (!card || !body || !countEl) return;
+
+  if (!hasDateFilter) {
+    card.style.display = 'none';
+    return;
+  }
+
+  const flagged = (rows || []).filter(r => {
+    if (String(r.justification || '').trim()) return false;
+    const sales = Number(r.sales || 0);
+    const salesLY = Number(r.salesLY || 0);
+    if (sales < salesLY) return true;
+    if (salesLY <= 0) return false;
+    return ((sales - salesLY) / salesLY) * 100 >= 20;
+  }).sort((a, b) => {
+    const ap = a.salesLY > 0 ? ((a.sales - a.salesLY) / a.salesLY) * 100 : 0;
+    const bp = b.salesLY > 0 ? ((b.sales - b.salesLY) / b.salesLY) * 100 : 0;
+    return Math.abs(bp) - Math.abs(ap);
+  });
+
+  card.style.display = 'block';
+  countEl.textContent = flagged.length;
+
+  if (!flagged.length) {
+    card.classList.add('empty-state');
+    body.innerHTML = \`<tr><td colspan="7" style="padding:0">
+      <div class="all-reported">
+        <div class="all-reported-icon"><i class="fa fa-circle-check"></i></div>
+        <div class="all-reported-title">All Required Justifications Provided</div>
+        <div class="all-reported-sub">No declined or 20%+ growth stores are missing justification for this date</div>
+      </div>
+    </td></tr>\`;
+    return;
+  }
+
+  card.classList.remove('empty-state');
+  body.innerHTML = flagged.map(r => {
+    const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const grad = AREA_GRADIENTS[r.area] || [DEFAULT_COLOR, DEFAULT_COLOR];
+    const sales = Number(r.sales || 0);
+    const salesLY = Number(r.salesLY || 0);
+    const diffVal = sales - salesLY;
+    const diffPct = salesLY ? (diffVal / salesLY) * 100 : 0;
+    const pctCls = diffVal < 0 ? 'down' : 'up';
+    const parameter = diffVal < 0 ? 'Declined vs Last Year' : 'Positive Growth 20%+ vs LY';
+    const pctText = salesLY ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : ' ';
+    return \`<tr>
+      <td><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId || '')}</span></td>
+      <td>
+        <div class="store-cell">
+          <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]})">\${initials(r.storeName)}</div>
+          <div class="store-info">
+            <div class="store-name">\${escHtml(r.storeName || ' ')}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area || ' ')}</span></td>
+      <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(sales)}</span></td>
+      <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(salesLY)}</span></td>
+      <td style="text-align:center"><span class="pill \${pctCls}">\${pctText}</span></td>
+      <td><span class="remark-pill other">\${parameter}</span></td>
     </tr>\`;
   }).join('');
 }
@@ -6019,7 +6117,7 @@ function renderDailyGapSection() {
   document.getElementById('dgGapDays').textContent = (summary.totalGapDays || 0).toLocaleString('en-PH');
   document.getElementById('dgCompletion').textContent = (summary.completionPct || 0).toFixed(2) + '%';
   document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
-  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
+  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap   ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
   document.getElementById('dgGapInfo').textContent = storeDaySummaryRows(gState.daily, 'gap').length + ' stores with gaps';
   document.getElementById('dgCompleteInfo').textContent = storeDaySummaryRows(gState.daily, 'complete').length + ' complete stores';

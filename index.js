@@ -998,76 +998,86 @@ app.get('/api/justification-ranking', async (req, res) => {
     if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
     if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
 
-    const flagged = filtered.map(r => {
+    const storeMap = new Map();
+    const areaMap = new Map();
+    const monthMapData = new Map();
+    filtered.forEach(r => {
       const sales = Number(r.sales || 0);
       const salesLY = Number(r.salesLY || 0);
       const diffVal = sales - salesLY;
       const diffPct = salesLY ? (diffVal / salesLY) * 100 : 0;
-      const parameter = diffVal < 0 ? 'Declined vs Last Year' : (salesLY > 0 && diffPct >= 20 ? 'Positive Growth 20%+ vs LY' : '');
-      return { ...r, diffVal, diffPct: parseFloat(diffPct.toFixed(2)), parameter };
-    }).filter(r => !String(r.justification || '').trim() && r.parameter);
-
-    const storeMap = new Map();
-    const areaMap = new Map();
-    const monthMapData = new Map();
-    flagged.forEach(r => {
+      const noJustification = !String(r.justification || '').trim();
+      const isDeclinedNoJust = noJustification && sales < salesLY;
+      const isGrowthNoJust = noJustification && salesLY > 0 && diffPct >= 20;
+      const missingInstance = isDeclinedNoJust || isGrowthNoJust;
       const key = (r.storeId || '') + '|' + (r.storeName || '');
+
       if (!storeMap.has(key)) storeMap.set(key, {
         storeId: r.storeId,
         storeName: r.storeName,
         area: r.area,
-        instances: 0,
-        declineCount: 0,
-        growthCount: 0,
-        sales: 0,
-        salesLY: 0,
-        latestDate: '',
+        days: new Set(),
+        missingDays: new Set(),
+        declineDays: new Set(),
+        growthDays: new Set(),
       });
       const s = storeMap.get(key);
-      s.instances += 1;
-      s.sales += Number(r.sales || 0);
-      s.salesLY += Number(r.salesLY || 0);
-      if (r.parameter === 'Declined vs Last Year') s.declineCount += 1;
-      else s.growthCount += 1;
-      if (!s.latestDate || r.date > s.latestDate) s.latestDate = r.date;
+      if (r.date) s.days.add(r.date);
+      if (isDeclinedNoJust && r.date) s.declineDays.add(r.date);
+      if (isGrowthNoJust && r.date) s.growthDays.add(r.date);
+      if (missingInstance && r.date) s.missingDays.add(r.date);
 
       const areaKey = r.area || 'No Area';
       if (!areaMap.has(areaKey)) areaMap.set(areaKey, { area: areaKey, instances: 0, stores: new Set(), declineCount: 0, growthCount: 0 });
       const a = areaMap.get(areaKey);
-      a.instances += 1;
       a.stores.add(key);
-      if (r.parameter === 'Declined vs Last Year') a.declineCount += 1;
-      else a.growthCount += 1;
+      if (missingInstance) a.instances += 1;
+      if (isDeclinedNoJust) a.declineCount += 1;
+      if (isGrowthNoJust) a.growthCount += 1;
 
       const mk = monthKey(r.date) || 'Unknown';
       if (!monthMapData.has(mk)) monthMapData.set(mk, { month: monthLabel(mk), monthKey: mk, instances: 0, declineCount: 0, growthCount: 0 });
       const m = monthMapData.get(mk);
-      m.instances += 1;
-      if (r.parameter === 'Declined vs Last Year') m.declineCount += 1;
-      else m.growthCount += 1;
+      if (missingInstance) m.instances += 1;
+      if (isDeclinedNoJust) m.declineCount += 1;
+      if (isGrowthNoJust) m.growthCount += 1;
     });
 
-    const ranking = [...storeMap.values()].map(s => {
-      const diffVal = s.sales - s.salesLY;
-      const diffPct = s.salesLY ? (diffVal / s.salesLY) * 100 : 0;
-      return { ...s, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
-    }).sort((a, b) => b.instances - a.instances || b.declineCount - a.declineCount || (a.storeName || '').localeCompare(b.storeName || ''));
+    const ranking = [...storeMap.values()].map(s => ({
+      storeId: s.storeId,
+      storeName: s.storeName,
+      area: s.area,
+      days: s.days.size,
+      noOfDays: s.missingDays.size,
+      declinedNoJustification: s.declineDays.size,
+      growth20NoJustification: s.growthDays.size,
+    })).sort((a, b) =>
+      a.noOfDays - b.noOfDays ||
+      a.declinedNoJustification - b.declinedNoJustification ||
+      a.growth20NoJustification - b.growth20NoJustification ||
+      (a.storeName || '').localeCompare(b.storeName || '')
+    );
 
+    const totalMissingDays = ranking.reduce((sum, r) => sum + r.noOfDays, 0);
     const byArea = [...areaMap.values()].map(a => ({ ...a, storeCount: a.stores.size })).sort((a, b) => b.instances - a.instances);
     const byMonth = [...monthMapData.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+    const worstStore = [...ranking].sort((a, b) => b.noOfDays - a.noOfDays || b.declinedNoJustification - a.declinedNoJustification)[0] || null;
     const summary = {
-      totalInstances: flagged.length,
-      affectedStores: ranking.length,
-      declineCount: flagged.filter(r => r.parameter === 'Declined vs Last Year').length,
-      growthCount: flagged.filter(r => r.parameter !== 'Declined vs Last Year').length,
-      worstStore: ranking[0] || null,
+      totalInstances: totalMissingDays,
+      affectedStores: ranking.filter(r => r.noOfDays > 0).length,
+      totalStores: ranking.length,
+      consistentStores: ranking.filter(r => r.noOfDays === 0).length,
+      declineCount: ranking.reduce((sum, r) => sum + r.declinedNoJustification, 0),
+      growthCount: ranking.reduce((sum, r) => sum + r.growth20NoJustification, 0),
+      worstStore,
     };
-    res.json({ success: true, summary, ranking, byArea, byMonth, detail: flagged });
+    res.json({ success: true, summary, ranking, byArea, byMonth });
   } catch (err) {
     console.error('Justification-ranking error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
-});app.get('/api/filters', async (req, res) => {
+});
+app.get('/api/filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
@@ -3622,16 +3632,16 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     </div>
 
     <div class="kpi-grid">
-      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-message-slash"></i></div>Total Instances</div><div class="kpi-value gradient-text" id="jKpiInstances">—</div><div class="kpi-sub">without justification</div></div>
-      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Affected Stores</div><div class="kpi-value gradient-text" id="jKpiStores">—</div><div class="kpi-sub">stores requiring explanation</div></div>
+      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-message-slash"></i></div>Total Instances</div><div class="kpi-value gradient-text" id="jKpiInstances">—</div><div class="kpi-sub">store-days without justification</div></div>
+      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Consistent Stores</div><div class="kpi-value gradient-text" id="jKpiStores">—</div><div class="kpi-sub">zero missing days</div></div>
       <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-arrow-trend-down"></i></div>Declined</div><div class="kpi-value" id="jKpiDeclined">—</div><div class="kpi-sub">below last year</div></div>
       <div class="kpi k-pct"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-arrow-trend-up"></i></div>Growth 20%+</div><div class="kpi-value" id="jKpiGrowth">—</div><div class="kpi-sub">positive vs LY</div></div>
-      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-ranking-star"></i></div>Top Store</div><div class="kpi-value gradient-text" id="jKpiTop">—</div><div class="kpi-sub" id="jKpiTopSub">highest count</div></div>
+      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-ranking-star"></i></div>Most Missing</div><div class="kpi-value gradient-text" id="jKpiTop">—</div><div class="kpi-sub" id="jKpiTopSub">bottom-ranked store</div></div>
     </div>
 
     <div class="charts-grid">
       <div class="chart-card">
-        <div class="chart-title"><i class="fa fa-ranking-star"></i> Stores with Most Missing Justifications</div>
+        <div class="chart-title"><i class="fa fa-ranking-star"></i> Store Ranking: Consistent to Most Missing</div>
         <div style="overflow-y:auto;max-height:560px;padding-right:4px">
           <div id="jStoreRankChartWrap" style="position:relative;height:520px">
             <canvas id="jStoreRankChart"></canvas>
@@ -3662,20 +3672,14 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
         <table>
           <thead>
             <tr>
-              <th style="text-align:center">Rank</th>
-              <th>Store Name</th>
-              <th>Area</th>
-              <th style="text-align:center">Instances</th>
-              <th style="text-align:center">Declined</th>
-              <th style="text-align:center">Growth 20%+</th>
-              <th style="text-align:right">Sales</th>
-              <th style="text-align:right">Sales LY</th>
-              <th style="text-align:center">Diff %</th>
-              <th>Latest Date</th>
+              <th>Store</th>
+              <th style="text-align:center">No. of Days</th>
+              <th style="text-align:center">No. Declined No Justification</th>
+              <th style="text-align:center">No. of Growth 20% without Justification</th>
             </tr>
           </thead>
           <tbody id="jRankingBody">
-            <tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
@@ -4418,7 +4422,7 @@ async function initJustificationTab() {
   } catch (e) {
     console.error('Justification init error:', e);
     const body = document.getElementById('jRankingBody');
-    if (body) body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
@@ -4458,13 +4462,13 @@ async function applyJustificationFilters() {
     if (store !== 'ALL') parts.push(store);
     const label = parts.length ? parts.join(' - ') : 'All months';
     const rc = document.getElementById('jRecordsCount');
-    if (rc) rc.innerHTML = '<span>' + (jState.summary.totalInstances || 0).toLocaleString('en-PH') + '</span> instances - <span>' + (jState.summary.affectedStores || 0).toLocaleString('en-PH') + '</span> stores';
+    if (rc) rc.innerHTML = '<span>' + (jState.summary.totalStores || 0).toLocaleString('en-PH') + '</span> stores - <span>' + (jState.summary.affectedStores || 0).toLocaleString('en-PH') + '</span> with missing';
     const ti = document.getElementById('jTableInfo');
     if (ti) ti.textContent = label;
   } catch (e) {
     console.error(e);
     const body = document.getElementById('jRankingBody');
-    if (body) body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
@@ -4473,16 +4477,16 @@ function renderJustificationKpis() {
   const top = s.worstStore || null;
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   set('jKpiInstances', Number(s.totalInstances || 0).toLocaleString('en-PH'));
-  set('jKpiStores', Number(s.affectedStores || 0).toLocaleString('en-PH'));
+  set('jKpiStores', Number(s.consistentStores || 0).toLocaleString('en-PH'));
   set('jKpiDeclined', Number(s.declineCount || 0).toLocaleString('en-PH'));
   set('jKpiGrowth', Number(s.growthCount || 0).toLocaleString('en-PH'));
   set('jKpiTop', top ? clientProperCase(top.storeName || '-') : '-');
-  set('jKpiTopSub', top ? (top.instances + ' instance' + (top.instances !== 1 ? 's' : '')) : 'highest count');
+  set('jKpiTopSub', top ? (top.noOfDays + ' day' + (top.noOfDays !== 1 ? 's' : '') + ' without justification') : 'bottom-ranked store');
 }
 
 function renderJustificationCharts() {
   const palette = chartPalette();
-  const topStores = (jState.ranking || []).slice(0, IS_MOBILE ? 8 : 15);
+  const topStores = [...(jState.ranking || [])].filter(r => Number(r.noOfDays || 0) > 0).slice(-(IS_MOBILE ? 8 : 15));
   const storeWrap = document.getElementById('jStoreRankChartWrap');
   if (storeWrap) storeWrap.style.height = Math.max(320, topStores.length * 34 + 90) + 'px';
   if (jStoreRankChartInst) jStoreRankChartInst.destroy();
@@ -4493,8 +4497,8 @@ function renderJustificationCharts() {
       data: {
         labels: topStores.map(r => clientProperCase(r.storeName || '-')),
         datasets: [
-          { label: 'Declined', data: topStores.map(r => r.declineCount || 0), backgroundColor: 'rgba(244,63,94,0.86)', borderRadius: 6, stack: 'x' },
-          { label: 'Growth 20%+', data: topStores.map(r => r.growthCount || 0), backgroundColor: 'rgba(16,185,129,0.86)', borderRadius: 6, stack: 'x' }
+          { label: 'Declined', data: topStores.map(r => r.declinedNoJustification || 0), backgroundColor: 'rgba(244,63,94,0.86)', borderRadius: 6, stack: 'x' },
+          { label: 'Growth 20%+', data: topStores.map(r => r.growth20NoJustification || 0), backgroundColor: 'rgba(16,185,129,0.86)', borderRadius: 6, stack: 'x' }
         ]
       },
       options: {
@@ -4537,24 +4541,18 @@ function renderJustificationTable() {
   if (!body) return;
   const rows = jState.ranking || [];
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No missing justifications found</p><small>All stores passed the standard parameters for the selected filters</small></td></tr>';
+    body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No stores found</p><small>Try adjusting the month, area, or store filters</small></td></tr>';
     return;
   }
   body.innerHTML = rows.map((r, idx) => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
-    const diffCls = Number(r.diffPct || 0) >= 0 ? 'up' : 'down';
-    const latest = r.latestDate ? new Date(r.latestDate + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+    const missingDays = Number(r.noOfDays || 0);
+    const dayClass = missingDays ? 'down' : 'up';
     return '<tr>' +
-      '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">' + (idx + 1) + '</span></td>' +
-      '<td><div class="store-cell"><div class="store-avatar" style="background:' + color + '">' + initials(r.storeName) + '</div><div class="store-info"><div class="store-name">' + escHtml(clientProperCase(r.storeName || '-')) + '</div><div class="store-id">#' + escHtml(r.storeId || '-') + '</div></div></div></td>' +
-      '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area || '-') + '</span></td>' +
-      '<td style="text-align:center"><span class="pill down">' + Number(r.instances || 0).toLocaleString('en-PH') + '</span></td>' +
-      '<td style="text-align:center"><span class="num" style="color:#fb7185">' + Number(r.declineCount || 0).toLocaleString('en-PH') + '</span></td>' +
-      '<td style="text-align:center"><span class="num" style="color:#34d399">' + Number(r.growthCount || 0).toLocaleString('en-PH') + '</span></td>' +
-      '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(r.sales || 0) + '</span></td>' +
-      '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(r.salesLY || 0) + '</span></td>' +
-      '<td style="text-align:center"><span class="pill ' + diffCls + '">' + (Number(r.diffPct || 0) >= 0 ? '+' : '') + Number(r.diffPct || 0).toFixed(2) + '%</span></td>' +
-      '<td><span class="timestamp-cell">' + latest + '</span></td>' +
+      '<td><div class="store-cell"><div class="store-avatar" style="background:' + color + '">' + initials(r.storeName) + '</div><div class="store-info"><div class="store-name">' + escHtml(clientProperCase(r.storeName || '-')) + '</div><div class="store-id">#' + escHtml(r.storeId || '-') + ' · ' + escHtml(r.area || '-') + '</div></div></div></td>' +
+      '<td style="text-align:center"><span class="pill ' + dayClass + '">' + missingDays.toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:center"><span class="num" style="color:#fb7185">' + Number(r.declinedNoJustification || 0).toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:center"><span class="num" style="color:#34d399">' + Number(r.growth20NoJustification || 0).toLocaleString('en-PH') + '</span></td>' +
     '</tr>';
   }).join('');
 }
@@ -5936,7 +5934,7 @@ async function initGapsTab() {
   } catch(e) {
     console.error('Data gaps init error:', e);
     const body = document.getElementById('gMonitorBody');
-    if (body) body.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
@@ -6024,7 +6022,7 @@ async function applyGapsFilters() {
     document.getElementById('gCompleteInfo').textContent = categoryCompleteStores().length + ' complete store' + (categoryCompleteStores().length !== 1 ? 's' : '') + ' - ' + filterText;
   } catch(e) {
     console.error(e);
-    document.getElementById('gMonitorBody').innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+    document.getElementById('gMonitorBody').innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon" style="background:linear-gradient(135deg,rgba(244,63,94,0.1),rgba(251,113,133,0.1));color:#fb7185"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 

@@ -3607,6 +3607,20 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
 
   <!--  JUSTIFICATION RANKING TAB  -->
   <div class="tab-content" id="tab-justification">
+    <div class="table-card" style="margin-bottom:18px;background:linear-gradient(135deg,rgba(16,185,129,0.10),rgba(6,182,212,0.08));border-color:rgba(16,185,129,0.28)">
+      <div class="table-header" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div>
+          <div class="table-title"><i class="fa fa-bullhorn"></i> Note &amp; Reminder</div>
+          <div style="margin-top:8px;color:var(--text-2);font-size:13px;line-height:1.55;max-width:980px">
+            Stores are ranked from most consistent to most missing justification. Daily explanations are required when sales declined vs LY or grew by 20% and above vs LY.
+          </div>
+        </div>
+        <button class="export-btn" onclick="exportJustificationRankingImage()" style="margin-left:auto">
+          <i class="fa fa-image"></i> Export PNG
+        </button>
+      </div>
+    </div>
+
     <div class="controls">
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-calendar"></i> Month</span>
@@ -3676,10 +3690,11 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
               <th style="text-align:center">No. of Days</th>
               <th style="text-align:center">No. Declined No Justification</th>
               <th style="text-align:center">No. of Growth 20% without Justification</th>
+              <th style="text-align:center">Rating</th>
             </tr>
           </thead>
           <tbody id="jRankingBody">
-            <tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+            <tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
@@ -4422,7 +4437,7 @@ async function initJustificationTab() {
   } catch (e) {
     console.error('Justification init error:', e);
     const body = document.getElementById('jRankingBody');
-    if (body) body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
   }
 }
 
@@ -4536,23 +4551,206 @@ function renderJustificationCharts() {
   }
 }
 
+function justificationRating(missingDays) {
+  const days = Number(missingDays || 0);
+  if (days === 0) return { label: 'Very Good', cls: 'up', color: '#047857', bg: '#d1fae5' };
+  if (days <= 2) return { label: 'Good', cls: 'flat', color: '#0e7490', bg: '#cffafe' };
+  if (days <= 5) return { label: 'Poor', cls: 'warn', color: '#b45309', bg: '#fef3c7' };
+  return { label: 'Worst', cls: 'down', color: '#be123c', bg: '#ffe4e6' };
+}
+
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  let line = '';
+  let lines = [];
+  words.forEach(word => {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  });
+  if (line) lines.push(line);
+  if (!lines.length) lines = [''];
+  lines.forEach((l, idx) => ctx.fillText(l, x, y + idx * lineHeight));
+  return lines.length * lineHeight;
+}
+
+function roundedCanvasRect(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+function drawCanvasPill(ctx, text, x, y, w, h, bg, fg) {
+  roundedCanvasRect(ctx, x, y, w, h, 12);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.font = '700 20px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2 + 1);
+}
+
+function exportJustificationRankingImage() {
+  const rows = jState.ranking || [];
+  if (!rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+  const month = selectedOptionText('jMonthFilter') || 'All Months';
+  const area = document.getElementById('jAreaFilter').value;
+  const store = document.getElementById('jStoreFilter').value;
+  const filterText = [month, area !== 'ALL' ? area : 'All Areas', store !== 'ALL' ? store : 'All Stores'].join(' | ');
+  const scale = 2;
+  const width = 1600;
+  const margin = 56;
+  const headerH = 270;
+  const rowH = 54;
+  const tableHeaderH = 60;
+  const footerH = 56;
+  const height = headerH + tableHeaderH + rows.length * rowH + footerH + margin;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#064e3b';
+  ctx.fillRect(0, 0, width, 18);
+  ctx.fillStyle = '#0f766e';
+  roundedCanvasRect(ctx, margin, 44, 92, 92, 22);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 44px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('C', margin + 46, 90);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '800 42px Arial';
+  ctx.fillText('CaMaNaVa eBRT - Justification Ranking', margin + 118, 76);
+  ctx.fillStyle = '#475569';
+  ctx.font = '600 22px Arial';
+  ctx.fillText(filterText, margin + 118, 112);
+  ctx.font = '500 20px Arial';
+  ctx.fillText('Reminder: Stores are ranked from most consistent to most missing justification. Explanation is required for declined sales vs LY or growth of 20% and above vs LY.', margin, 170);
+
+  const s = jState.summary || {};
+  const kpis = [
+    ['Total Missing Days', Number(s.totalInstances || 0).toLocaleString('en-PH'), '#0f766e'],
+    ['Consistent Stores', Number(s.consistentStores || 0).toLocaleString('en-PH'), '#047857'],
+    ['Declined No Just.', Number(s.declineCount || 0).toLocaleString('en-PH'), '#be123c'],
+    ['Growth 20%+ No Just.', Number(s.growthCount || 0).toLocaleString('en-PH'), '#0e7490']
+  ];
+  const kpiW = 350;
+  kpis.forEach((k, idx) => {
+    const x = margin + idx * (kpiW + 18);
+    roundedCanvasRect(ctx, x, 204, kpiW, 82, 16);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fill();
+    ctx.strokeStyle = '#dbeafe';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = k[2];
+    ctx.font = '800 28px Arial';
+    ctx.fillText(k[1], x + 22, 238);
+    ctx.fillStyle = '#475569';
+    ctx.font = '700 17px Arial';
+    ctx.fillText(k[0], x + 22, 265);
+  });
+
+  const cols = [
+    { label: 'Store', x: margin, w: 570, align: 'left' },
+    { label: 'No. of Days', x: margin + 590, w: 170, align: 'center' },
+    { label: 'No. Declined No Justification', x: margin + 780, w: 280, align: 'center' },
+    { label: 'No. Growth 20% No Justification', x: margin + 1080, w: 310, align: 'center' },
+    { label: 'Rating', x: margin + 1410, w: 135, align: 'center' }
+  ];
+  let y = headerH;
+  ctx.fillStyle = '#166534';
+  ctx.fillRect(margin, y, width - margin * 2, tableHeaderH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 18px Arial';
+  ctx.textBaseline = 'middle';
+  cols.forEach(c => {
+    ctx.textAlign = c.align;
+    ctx.fillText(c.label, c.align === 'left' ? c.x + 16 : c.x + c.w / 2, y + tableHeaderH / 2);
+  });
+  y += tableHeaderH;
+
+  rows.forEach((r, idx) => {
+    const missingDays = Number(r.noOfDays || 0);
+    const rating = justificationRating(missingDays);
+    ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+    ctx.fillRect(margin, y, width - margin * 2, rowH);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.beginPath();
+    ctx.moveTo(margin, y + rowH);
+    ctx.lineTo(width - margin, y + rowH);
+    ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '800 20px Arial';
+    ctx.fillText(clientProperCase(r.storeName || '-'), cols[0].x + 16, y + 21);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '600 15px Arial';
+    ctx.fillText('#' + (r.storeId || '-') + ' | ' + (r.area || '-'), cols[0].x + 16, y + 41);
+    ctx.font = '800 20px Arial';
+    ctx.fillStyle = missingDays ? '#be123c' : '#047857';
+    ctx.textAlign = 'center';
+    ctx.fillText(missingDays.toLocaleString('en-PH'), cols[1].x + cols[1].w / 2, y + rowH / 2);
+    ctx.fillStyle = '#be123c';
+    ctx.fillText(Number(r.declinedNoJustification || 0).toLocaleString('en-PH'), cols[2].x + cols[2].w / 2, y + rowH / 2);
+    ctx.fillStyle = '#047857';
+    ctx.fillText(Number(r.growth20NoJustification || 0).toLocaleString('en-PH'), cols[3].x + cols[3].w / 2, y + rowH / 2);
+    drawCanvasPill(ctx, rating.label, cols[4].x, y + 12, cols[4].w, 30, rating.bg, rating.color);
+    y += rowH;
+  });
+
+  ctx.fillStyle = '#64748b';
+  ctx.font = '600 16px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText('Generated ' + new Date().toLocaleString('en-PH') + ' | Very Good: 0 days, Good: 1-2, Poor: 3-5, Worst: 6+.', margin, height - 28);
+
+  const link = document.createElement('a');
+  link.download = 'CaMaNaVa_Justification_Ranking_' + issueExportDateTag() + '.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
 function renderJustificationTable() {
   const body = document.getElementById('jRankingBody');
   if (!body) return;
   const rows = jState.ranking || [];
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="4" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No stores found</p><small>Try adjusting the month, area, or store filters</small></td></tr>';
+    body.innerHTML = '<tr><td colspan="5" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No stores found</p><small>Try adjusting the month, area, or store filters</small></td></tr>';
     return;
   }
   body.innerHTML = rows.map((r, idx) => {
     const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
     const missingDays = Number(r.noOfDays || 0);
     const dayClass = missingDays ? 'down' : 'up';
+    const rating = justificationRating(missingDays);
     return '<tr>' +
       '<td><div class="store-cell"><div class="store-avatar" style="background:' + color + '">' + initials(r.storeName) + '</div><div class="store-info"><div class="store-name">' + escHtml(clientProperCase(r.storeName || '-')) + '</div><div class="store-id">#' + escHtml(r.storeId || '-') + ' · ' + escHtml(r.area || '-') + '</div></div></div></td>' +
       '<td style="text-align:center"><span class="pill ' + dayClass + '">' + missingDays.toLocaleString('en-PH') + '</span></td>' +
       '<td style="text-align:center"><span class="num" style="color:#fb7185">' + Number(r.declinedNoJustification || 0).toLocaleString('en-PH') + '</span></td>' +
       '<td style="text-align:center"><span class="num" style="color:#34d399">' + Number(r.growth20NoJustification || 0).toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:center"><span class="pill ' + rating.cls + '" style="background:' + rating.bg + ';color:' + rating.color + ';border-color:' + rating.color + '33">' + rating.label + '</span></td>' +
     '</tr>';
   }).join('');
 }

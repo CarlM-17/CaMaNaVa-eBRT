@@ -2770,9 +2770,14 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
 
   <!-- Table -->
   <div class="table-card">
-    <div class="table-header">
+    <div class="table-header" style="gap:14px;flex-wrap:wrap">
       <div class="table-title"><i class="fa fa-table-list"></i> Store Sales Detail</div>
-      <div class="table-date" id="tableDate">—</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+        <button class="export-btn" onclick="exportDailySalesDetailToExcel()">
+          <i class="fa fa-file-excel"></i> Export Excel
+        </button>
+        <div class="table-date" id="tableDate">—</div>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
@@ -4248,6 +4253,67 @@ function renderTable(rows) {
   tbody.innerHTML = html;
 }
 
+function exportDailySalesDetailToExcel() {
+  const rows = dailyRowsCache || [];
+  if (!rows.length) {
+    alert('No data to export with the current filters.');
+    return;
+  }
+
+  const date = document.getElementById('dateFilter').value;
+  const area = document.getElementById('areaFilter').value;
+  const store = document.getElementById('storeFilter').value;
+
+  const data = rows.map(r => ({
+    'Store ID': r.storeId || '',
+    'Store Name': clientProperCase(r.storeName || ''),
+    'Area': r.area || '',
+    'Sales': Number(r.sales || 0),
+    'Sales LY': Number(r.salesLY || 0),
+    'Diff %': Number(r.diffPct || 0),
+    'Diff Amount': Number(r.diffVal || 0),
+    'Justification': r.justification || ''
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 10 },
+    { wch: 28 },
+    { wch: 20 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 12 },
+    { wch: 16 },
+    { wch: 60 }
+  ];
+
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      fill: { fgColor: { rgb: '166534' } },
+      font: { color: { rgb: 'FFFFFF' }, bold: true },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (ws[addr]) ws[addr].s = headerStyle;
+    }
+    const numCols = { 3: '#,##0.00', 4: '#,##0.00', 5: '0.00"%"', 6: '#,##0.00' };
+    for (let R = 1; R <= range.e.r; R++) {
+      for (const [col, fmt] of Object.entries(numCols)) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: parseInt(col) });
+        if (ws[addr]) ws[addr].z = fmt;
+      }
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Daily Sales Detail');
+  const dateTag = date ? date.replace(/[^a-z0-9]/gi, '_') : 'All_Dates';
+  const areaTag = area !== 'ALL' ? '_' + area.replace(/[^a-z0-9]/gi, '_') : '';
+  const storeTag = store !== 'ALL' ? '_' + store.replace(/[^a-z0-9]/gi, '_') : '';
+  XLSX.writeFile(wb, 'CaMaNaVa_Daily_Sales_Detail_' + dateTag + areaTag + storeTag + '.xlsx');
+}
 function renderCharts(rows) {
   const top = rows.slice(0, IS_MOBILE ? 8 : 14);
   const labels = top.map(r => r.storeName);
@@ -4472,18 +4538,18 @@ function renderWithoutJustification(rows, hasDateFilter) {
     const diffPct = salesLY ? (diffVal / salesLY) * 100 : 0;
     const pctCls = diffVal < 0 ? 'down' : 'up';
     const parameter = diffVal < 0 ? 'Declined vs Last Year' : 'Positive Growth 20%+ vs LY';
-    const pctText = salesLY ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '�';
+    const pctText = salesLY ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : ' ';
     return \`<tr>
       <td><span class="num num-bold" style="color:var(--text-1)">#\${escHtml(r.storeId || '')}</span></td>
       <td>
         <div class="store-cell">
           <div class="store-avatar" style="background:linear-gradient(135deg, \${grad[0]}, \${grad[1]})">\${initials(r.storeName)}</div>
           <div class="store-info">
-            <div class="store-name">\${escHtml(r.storeName || '�')}</div>
+            <div class="store-name">\${escHtml(r.storeName || ' ')}</div>
           </div>
         </div>
       </td>
-      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area || '�')}</span></td>
+      <td><span class="area-tag"><span class="area-dot" style="background:\${color};color:\${color}"></span>\${escHtml(r.area || ' ')}</span></td>
       <td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">\${fmtFull(sales)}</span></td>
       <td style="text-align:right"><span class="num" style="color:var(--text-3)">\${fmtFull(salesLY)}</span></td>
       <td style="text-align:center"><span class="pill \${pctCls}">\${pctText}</span></td>
@@ -6119,7 +6185,7 @@ function renderDailyGapSection() {
   document.getElementById('dgGapDays').textContent = (summary.totalGapDays || 0).toLocaleString('en-PH');
   document.getElementById('dgCompletion').textContent = (summary.completionPct || 0).toFixed(2) + '%';
   document.getElementById('dgStoreMonths').textContent = (summary.storeMonths || 0).toLocaleString('en-PH');
-  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap � ' + (summary.completeStoreMonths || 0) + ' complete';
+  document.getElementById('dgStoreMonthsSub').textContent = (summary.gapStoreMonths || 0) + ' with gap   ' + (summary.completeStoreMonths || 0) + ' complete';
   document.getElementById('dgChartInfo').textContent = summary.throughDate ? ('Through ' + summary.throughDate) : 'January to yesterday';
   document.getElementById('dgGapInfo').textContent = storeDaySummaryRows(gState.daily, 'gap').length + ' stores with gaps';
   document.getElementById('dgCompleteInfo').textContent = storeDaySummaryRows(gState.daily, 'complete').length + ' complete stores';

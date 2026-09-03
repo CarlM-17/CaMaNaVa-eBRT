@@ -985,7 +985,89 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-app.get('/api/filters', async (req, res) => {
+
+app.get('/api/justification-ranking', async (req, res) => {
+  try {
+    const auth = getAuthClient();
+    const sheets = google.sheets({ version: 'v4', auth });
+    let data = await getSalesData(sheets);
+    data = scopeRowsByArea(data, req.user);
+    const { month, area, store } = req.query;
+    let filtered = data;
+    if (month && month !== 'ALL') filtered = filtered.filter(r => monthKey(r.date) === month);
+    if (area && area !== 'ALL') filtered = filtered.filter(r => r.area === area);
+    if (store && store !== 'ALL') filtered = filtered.filter(r => r.storeName === store);
+
+    const flagged = filtered.map(r => {
+      const sales = Number(r.sales || 0);
+      const salesLY = Number(r.salesLY || 0);
+      const diffVal = sales - salesLY;
+      const diffPct = salesLY ? (diffVal / salesLY) * 100 : 0;
+      const parameter = diffVal < 0 ? 'Declined vs Last Year' : (salesLY > 0 && diffPct >= 20 ? 'Positive Growth 20%+ vs LY' : '');
+      return { ...r, diffVal, diffPct: parseFloat(diffPct.toFixed(2)), parameter };
+    }).filter(r => !String(r.justification || '').trim() && r.parameter);
+
+    const storeMap = new Map();
+    const areaMap = new Map();
+    const monthMapData = new Map();
+    flagged.forEach(r => {
+      const key = (r.storeId || '') + '|' + (r.storeName || '');
+      if (!storeMap.has(key)) storeMap.set(key, {
+        storeId: r.storeId,
+        storeName: r.storeName,
+        area: r.area,
+        instances: 0,
+        declineCount: 0,
+        growthCount: 0,
+        sales: 0,
+        salesLY: 0,
+        latestDate: '',
+      });
+      const s = storeMap.get(key);
+      s.instances += 1;
+      s.sales += Number(r.sales || 0);
+      s.salesLY += Number(r.salesLY || 0);
+      if (r.parameter === 'Declined vs Last Year') s.declineCount += 1;
+      else s.growthCount += 1;
+      if (!s.latestDate || r.date > s.latestDate) s.latestDate = r.date;
+
+      const areaKey = r.area || 'No Area';
+      if (!areaMap.has(areaKey)) areaMap.set(areaKey, { area: areaKey, instances: 0, stores: new Set(), declineCount: 0, growthCount: 0 });
+      const a = areaMap.get(areaKey);
+      a.instances += 1;
+      a.stores.add(key);
+      if (r.parameter === 'Declined vs Last Year') a.declineCount += 1;
+      else a.growthCount += 1;
+
+      const mk = monthKey(r.date) || 'Unknown';
+      if (!monthMapData.has(mk)) monthMapData.set(mk, { month: monthLabel(mk), monthKey: mk, instances: 0, declineCount: 0, growthCount: 0 });
+      const m = monthMapData.get(mk);
+      m.instances += 1;
+      if (r.parameter === 'Declined vs Last Year') m.declineCount += 1;
+      else m.growthCount += 1;
+    });
+
+    const ranking = [...storeMap.values()].map(s => {
+      const diffVal = s.sales - s.salesLY;
+      const diffPct = s.salesLY ? (diffVal / s.salesLY) * 100 : 0;
+      return { ...s, diffVal, diffPct: parseFloat(diffPct.toFixed(2)) };
+    }).sort((a, b) => b.instances - a.instances || b.declineCount - a.declineCount || (a.storeName || '').localeCompare(b.storeName || ''));
+
+    const byArea = [...areaMap.values()].map(a => ({ ...a, storeCount: a.stores.size })).sort((a, b) => b.instances - a.instances);
+    const byMonth = [...monthMapData.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+    const summary = {
+      totalInstances: flagged.length,
+      affectedStores: ranking.length,
+      declineCount: flagged.filter(r => r.parameter === 'Declined vs Last Year').length,
+      growthCount: flagged.filter(r => r.parameter !== 'Declined vs Last Year').length,
+      worstStore: ranking[0] || null,
+    };
+    res.json({ success: true, summary, ranking, byArea, byMonth, detail: flagged });
+  } catch (err) {
+    console.error('Justification-ranking error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});app.get('/api/filters', async (req, res) => {
   try {
     const auth = getAuthClient();
     const sheets = google.sheets({ version: 'v4', auth });
@@ -2685,11 +2767,8 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     <button class="tab-btn" data-tab="gaps" onclick="switchTab('gaps')">
       <i class="fa fa-clipboard-check"></i> Data Gaps Monitoring
     </button>
-    <button class="tab-btn" data-tab="notes" onclick="switchTab('notes')">
-      <i class="fa fa-note-sticky"></i> Store Notes
-    </button>
-    <button class="tab-btn" data-tab="issues" onclick="switchTab('issues')">
-      <i class="fa fa-triangle-exclamation"></i> Store Issues &amp; Concerns
+    <button class="tab-btn" data-tab="justification" onclick="switchTab('justification')">
+      <i class="fa fa-ranking-star"></i> Justification Ranking
     </button>
   </div>
 
@@ -3516,353 +3595,92 @@ html.theme-light ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#08
     </div>
   </div><!-- /tab-gaps -->
 
-  <!--  STORE NOTES TAB  -->
-  <div class="tab-content" id="tab-notes">
-
-    <!-- Controls -->
+  <!--  JUSTIFICATION RANKING TAB  -->
+  <div class="tab-content" id="tab-justification">
     <div class="controls">
       <div class="ctrl-group">
+        <span class="ctrl-label"><i class="fa fa-calendar"></i> Month</span>
+        <select id="jMonthFilter" onchange="applyJustificationFilters()">
+          <option value="ALL">All Months</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-layer-group"></i> Area</span>
-        <select id="nAreaFilter" onchange="onNAreaChange()">
+        <select id="jAreaFilter" onchange="onJAreaChange()">
           <option value="ALL">All Areas</option>
         </select>
       </div>
       <div class="divider"></div>
       <div class="ctrl-group">
         <span class="ctrl-label"><i class="fa fa-store"></i> Store</span>
-        <select id="nStoreFilter" onchange="applyNotesFilters()">
+        <select id="jStoreFilter" onchange="applyJustificationFilters()">
           <option value="ALL">All Stores</option>
         </select>
       </div>
-      <div class="divider"></div>
-      <div class="ctrl-group">
-        <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
-        <div id="nStatusFilter" class="check-filter"></div>
-      </div>
-      <div class="divider"></div>
-      <div class="ctrl-group" style="flex:1;min-width:180px">
-        <span class="ctrl-label"><i class="fa fa-magnifying-glass"></i> Search</span>
-        <input type="text" id="nSearch" placeholder="Search notes, store, remarks..." oninput="debouncedNotesSearch()" style="background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);color:var(--text-1);padding:9px 14px;border-radius:10px;font-size:13px;font-family:'Inter',sans-serif;font-weight:500;outline:none;flex:1;min-width:160px"/>
-      </div>
-      <div class="records-count" id="nRecordsCount">—</div>
+      <div class="records-count" id="jRecordsCount">—</div>
     </div>
 
-    <!-- Notes Table -->
-    <div class="table-card">
-      <div class="table-header">
-        <div class="table-title"><i class="fa fa-note-sticky"></i> Store Notes</div>
-        <div class="table-date" id="nTableInfo">Latest entries</div>
-      </div>
-      <div class="table-wrap" style="max-height:720px">
-        <table>
-          <thead>
-            <tr>
-              <th class="sortable" data-sort-key="ts" data-sort-type="num" onclick="sortNotes('ts','num')">Time Stamp <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortNotes('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
-              <th>Notes</th>
-              <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortNotes('status','string')">Status <span class="sort-icon">⇅</span></th>
-              <th>Remarks</th>
-              <th style="text-align:center">Photo Link</th>
-            </tr>
-          </thead>
-          <tbody id="nTableBody">
-            <tr><td colspan="6" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Status Performance KPIs -->
-    <div class="kpi-grid" style="margin-top:24px">
-      <div class="kpi k-sales">
-        <div class="kpi-label"><div class="kpi-icon"><i class="fa fa-list-check"></i></div>Total Notes</div>
-        <div class="kpi-value gradient-text" id="nKpiTotal">—</div>
-        <div class="kpi-sub">In current view</div>
-      </div>
-      <div class="kpi" style="--accent-color:#10b981">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#10b981,#34d399)"><i class="fa fa-circle-check"></i></div>Done</div>
-        <div class="kpi-value" id="nKpiDone" style="color:#34d399">—</div>
-        <div class="kpi-sub" id="nKpiDoneSub">0%</div>
-      </div>
-      <div class="kpi" style="--accent-color:#f59e0b">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><i class="fa fa-clock"></i></div>Pending</div>
-        <div class="kpi-value" id="nKpiPending" style="color:#fbbf24">—</div>
-        <div class="kpi-sub" id="nKpiPendingSub">0%</div>
-      </div>
-      <div class="kpi" style="--accent-color:#6366f1">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#6366f1,#818cf8)"><i class="fa fa-spinner"></i></div>Ongoing</div>
-        <div class="kpi-value" id="nKpiOngoing" style="color:#818cf8">—</div>
-        <div class="kpi-sub" id="nKpiOngoingSub">0%</div>
-      </div>
-      <div class="kpi" style="--accent-color:#94a3b8">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#64748b,#94a3b8)"><i class="fa fa-circle-question"></i></div>No Status</div>
-        <div class="kpi-value" id="nKpiBlank" style="color:#94a3b8">—</div>
-        <div class="kpi-sub" id="nKpiBlankSub">0%</div>
-      </div>
-    </div>
-
-    <!-- Performance Charts -->
-    <div class="charts-grid">
-      <div class="chart-card">
-        <div class="chart-title">
-          <i class="fa fa-ranking-star"></i> Area Status Performance
-          <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Best → Worst</span>
-        </div>
-        <div style="position:relative;height:300px">
-          <canvas id="nAreaChart"></canvas>
-        </div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-title">
-          <i class="fa fa-chart-pie"></i> Overall Status Mix
-        </div>
-        <div style="position:relative;height:300px">
-          <canvas id="nStatusPie"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- Store Performance Chart (full width, scrollable for many stores) -->
-    <div class="chart-card" style="margin-top:16px">
-      <div class="chart-title">
-        <i class="fa fa-store"></i> Store Status Performance
-        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">Ranked Best → Worst</span>
-      </div>
-      <div style="overflow-y:auto;max-height:560px;padding-right:4px">
-        <div id="nStoreChartWrap" style="position:relative;height:600px">
-          <canvas id="nStoreChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- Status Detail Tables -->
-    <div class="charts-grid" style="margin-top:16px">
-      <div class="table-card">
-        <div class="table-header">
-          <div class="table-title"><i class="fa fa-map-location-dot"></i> Area Status Breakdown</div>
-          <div class="table-date" id="nAreaTableInfo">—</div>
-        </div>
-        <div class="table-wrap" style="max-height:380px">
-          <table>
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Area</th>
-                <th style="text-align:center">Total</th>
-                <th style="text-align:center" title="Done %">Done %</th>
-                <th style="text-align:center" title="Pending %">Pending %</th>
-                <th style="text-align:center" title="Ongoing %">Ongoing %</th>
-                <th style="text-align:center" title="No Status %">Blank %</th>
-              </tr>
-            </thead>
-            <tbody id="nAreaTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="table-card">
-        <div class="table-header">
-          <div class="table-title"><i class="fa fa-store"></i> Store Status Breakdown</div>
-          <div class="table-date" id="nStoreTableInfo">—</div>
-        </div>
-        <div class="table-wrap" style="max-height:380px">
-          <table>
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Store</th>
-                <th style="text-align:center">Total</th>
-                <th style="text-align:center">Done %</th>
-                <th style="text-align:center">Pending %</th>
-                <th style="text-align:center">Ongoing %</th>
-                <th style="text-align:center">Blank %</th>
-              </tr>
-            </thead>
-            <tbody id="nStoreTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- /tab-notes -->
-
-  <!--  ISSUES & CONCERNS TAB  -->
-  <div class="tab-content" id="tab-issues">
-
-    <!-- Controls -->
-    <div class="controls">
-      <div class="ctrl-group">
-        <span class="ctrl-label"><i class="fa fa-layer-group"></i> Area</span>
-        <select id="iAreaFilter" onchange="onIAreaChange()">
-          <option value="ALL">All Areas</option>
-        </select>
-      </div>
-      <div class="divider"></div>
-      <div class="ctrl-group">
-        <span class="ctrl-label"><i class="fa fa-store"></i> Store</span>
-        <select id="iStoreFilter" onchange="applyIssuesFilters()">
-          <option value="ALL">All Stores</option>
-        </select>
-      </div>
-      <div class="divider"></div>
-      <div class="ctrl-group">
-        <span class="ctrl-label"><i class="fa fa-flag"></i> Priority</span>
-        <div id="iPriorityFilter" class="check-filter"></div>
-      </div>
-      <div class="divider"></div>
-      <div class="ctrl-group">
-        <span class="ctrl-label"><i class="fa fa-circle-check"></i> Status</span>
-        <div id="iStatusFilter" class="check-filter"></div>
-      </div>
-      <div class="divider"></div>
-      <div class="ctrl-group" style="flex:1;min-width:160px">
-        <span class="ctrl-label"><i class="fa fa-magnifying-glass"></i> Search</span>
-        <input type="text" id="iSearch" placeholder="Search description, store, assignee..." oninput="debouncedIssuesSearch()" style="background:rgba(15,20,35,0.7);border:1px solid var(--border-strong);color:var(--text-1);padding:9px 14px;border-radius:10px;font-size:13px;font-family:'Inter',sans-serif;font-weight:500;outline:none;flex:1;min-width:160px"/>
-      </div>
-      <div class="records-count" id="iRecordsCount">—</div>
-    </div>
-
-    <!-- KPI Cards -->
     <div class="kpi-grid">
-      <div class="kpi k-sales">
-        <div class="kpi-label"><div class="kpi-icon"><i class="fa fa-list-check"></i></div>Total Issues</div>
-        <div class="kpi-value gradient-text" id="i-kpi-total">—</div>
-        <div class="kpi-sub">In current view</div>
-      </div>
-      <div class="kpi" style="--accent-color:#f43f5e">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f43f5e,#fb7185)"><i class="fa fa-circle-exclamation"></i></div>Open</div>
-        <div class="kpi-value" id="i-kpi-open" style="color:#fb7185">—</div>
-        <div class="kpi-sub" id="i-kpi-open-sub">—</div>
-      </div>
-      <div class="kpi" style="--accent-color:#10b981">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#10b981,#34d399)"><i class="fa fa-circle-check"></i></div>Resolved</div>
-        <div class="kpi-value" id="i-kpi-resolved" style="color:#34d399">—</div>
-        <div class="kpi-sub" id="i-kpi-resolved-sub">—</div>
-      </div>
-      <div class="kpi" style="--accent-color:#f59e0b">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><i class="fa fa-clock"></i></div>Overdue</div>
-        <div class="kpi-value" id="i-kpi-overdue" style="color:#fbbf24">—</div>
-        <div class="kpi-sub" id="i-kpi-overdue-sub">Past target date</div>
-      </div>
-      <div class="kpi" style="--accent-color:#6366f1">
-        <div class="kpi-label"><div class="kpi-icon" style="background:linear-gradient(135deg,#6366f1,#818cf8)"><i class="fa fa-stopwatch"></i></div>Avg Days Open</div>
-        <div class="kpi-value gradient-text" id="i-kpi-avg-days">—</div>
-        <div class="kpi-sub">Across all open issues</div>
-      </div>
+      <div class="kpi k-sales"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-message-slash"></i></div>Total Instances</div><div class="kpi-value gradient-text" id="jKpiInstances">—</div><div class="kpi-sub">without justification</div></div>
+      <div class="kpi k-ly"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-store"></i></div>Affected Stores</div><div class="kpi-value gradient-text" id="jKpiStores">—</div><div class="kpi-sub">stores requiring explanation</div></div>
+      <div class="kpi k-diff"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-arrow-trend-down"></i></div>Declined</div><div class="kpi-value" id="jKpiDeclined">—</div><div class="kpi-sub">below last year</div></div>
+      <div class="kpi k-pct"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-arrow-trend-up"></i></div>Growth 20%+</div><div class="kpi-value" id="jKpiGrowth">—</div><div class="kpi-sub">positive vs LY</div></div>
+      <div class="kpi k-stores"><div class="kpi-label"><div class="kpi-icon"><i class="fa fa-ranking-star"></i></div>Top Store</div><div class="kpi-value gradient-text" id="jKpiTop">—</div><div class="kpi-sub" id="jKpiTopSub">highest count</div></div>
     </div>
 
-    <!-- Charts Row 1 -->
     <div class="charts-grid">
       <div class="chart-card">
-        <div class="chart-title"><i class="fa fa-chart-pie"></i> Issues by Priority</div>
-        <div style="position:relative;height:300px">
-          <canvas id="iPriorityChart"></canvas>
+        <div class="chart-title"><i class="fa fa-ranking-star"></i> Stores with Most Missing Justifications</div>
+        <div style="overflow-y:auto;max-height:560px;padding-right:4px">
+          <div id="jStoreRankChartWrap" style="position:relative;height:520px">
+            <canvas id="jStoreRankChart"></canvas>
+          </div>
         </div>
       </div>
       <div class="chart-card">
-        <div class="chart-title"><i class="fa fa-chart-pie"></i> Issues by Status</div>
-        <div style="position:relative;height:300px">
-          <canvas id="iStatusChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <div class="table-card" style="margin:16px 0 24px">
-      <div class="table-header">
-        <div class="table-title"><i class="fa fa-triangle-exclamation"></i> High Priority Not Done Summary</div>
-        <button class="export-btn" onclick="exportHighPriorityNotDoneToExcel()">
-          <i class="fa fa-file-excel"></i> Export Excel
-        </button>
-        <div class="table-date" id="iHighNotDoneInfo">—</div>
-      </div>
-      <div class="table-wrap" style="max-height:360px">
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Store Name</th>
-              <th>Issue Description</th>
-              <th>Impact</th>
-              <th>Status</th>
-              <th>Remarks</th>
-              <th>Last Update</th>
-            </tr>
-          </thead>
-          <tbody id="iHighNotDoneBody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Charts Row 2 -->
-    <div class="charts-grid">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fa fa-tags"></i> Issues by Category</div>
+        <div class="chart-title"><i class="fa fa-layer-group"></i> Missing Justifications by Area</div>
         <div style="position:relative;height:340px">
-          <canvas id="iCategoryChart"></canvas>
-        </div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-title"><i class="fa fa-layer-group"></i> Issues by Area</div>
-        <div style="position:relative;height:340px">
-          <canvas id="iAreaChart"></canvas>
+          <canvas id="jAreaChart"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- Top Affected Stores -->
-    <div class="chart-card" style="margin-top:16px">
-      <div class="chart-title">
-        <i class="fa fa-ranking-star"></i> Top Affected Stores
-        <span style="margin-left:auto;font-size:10.5px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.08em">By open issues</span>
-      </div>
-      <div style="overflow-y:auto;max-height:520px;padding-right:4px">
-        <div id="iStoreChartWrap" style="position:relative;height:400px">
-          <canvas id="iStoreChart"></canvas>
-        </div>
+    <div class="chart-card" style="margin-top:24px">
+      <div class="chart-title"><i class="fa fa-calendar-days"></i> Monthly Trend</div>
+      <div style="position:relative;height:320px">
+        <canvas id="jTrendChart"></canvas>
       </div>
     </div>
 
-    <!-- Issues Table -->
     <div class="table-card" style="margin-top:24px">
-      <div class="table-header">
-        <div class="table-title"><i class="fa fa-list-ul"></i> Issues &amp; Concerns Detail</div>
-        <button class="export-btn" onclick="exportIssuesDetailToExcel()">
-          <i class="fa fa-file-excel"></i> Export Excel
-        </button>
-        <div class="table-date" id="iTableInfo">—</div>
+      <div class="table-header" style="gap:14px;flex-wrap:wrap">
+        <div class="table-title"><i class="fa fa-table-list"></i> Justification Ranking</div>
+        <div class="table-date" id="jTableInfo">—</div>
       </div>
       <div class="table-wrap" style="max-height:720px">
         <table>
           <thead>
             <tr>
-              <th class="sortable" data-sort-key="area" data-sort-type="string" onclick="sortIssues('area','string')">Area <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="storeId" data-sort-type="string" onclick="sortIssues('storeId','string')">Store ID <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="storeName" data-sort-type="string" onclick="sortIssues('storeName','string')">Store Name <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="dateTs" data-sort-type="num" onclick="sortIssues('dateTs','num')">Date <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="reportedBy" data-sort-type="string" onclick="sortIssues('reportedBy','string')">Reported By <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="issueCategory" data-sort-type="string" onclick="sortIssues('issueCategory','string')">Issue Category <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="issueSubCategory" data-sort-type="string" onclick="sortIssues('issueSubCategory','string')">Sub Category <span class="sort-icon">⇅</span></th>
-              <th>Issue Description</th>
-              <th class="sortable" data-sort-key="priority" data-sort-type="string" onclick="sortIssues('priority','string')" style="text-align:center">Priority <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="impactLevel" data-sort-type="string" onclick="sortIssues('impactLevel','string')" style="text-align:center">Impact <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="assignTo" data-sort-type="string" onclick="sortIssues('assignTo','string')">Assign To <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="targetDateTs" data-sort-type="num" onclick="sortIssues('targetDateTs','num')">Target Date <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="status" data-sort-type="string" onclick="sortIssues('status','string')" style="text-align:center">Status <span class="sort-icon">⇅</span></th>
-              <th>Resolution Details</th>
-              <th class="sortable" data-sort-key="dateResolvedTs" data-sort-type="num" onclick="sortIssues('dateResolvedTs','num')">Date Resolved <span class="sort-icon">⇅</span></th>
-              <th class="sortable" data-sort-key="daysOpen" data-sort-type="num" onclick="sortIssues('daysOpen','num')" style="text-align:center">Days Open <span class="sort-icon">⇅</span></th>
-              <th>Remarks / Notes</th>
-              <th>Last Update</th>
+              <th style="text-align:center">Rank</th>
+              <th>Store Name</th>
+              <th>Area</th>
+              <th style="text-align:center">Instances</th>
+              <th style="text-align:center">Declined</th>
+              <th style="text-align:center">Growth 20%+</th>
+              <th style="text-align:right">Sales</th>
+              <th style="text-align:right">Sales LY</th>
+              <th style="text-align:center">Diff %</th>
+              <th>Latest Date</th>
             </tr>
           </thead>
-          <tbody id="iTableBody">
-            <tr><td colspan="18" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
+          <tbody id="jRankingBody">
+            <tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-spinner fa-spin"></i></div><p>Loading...</p></td></tr>
           </tbody>
         </table>
       </div>
     </div>
-
-  </div><!-- /tab-issues -->
-
+  </div><!-- /tab-justification -->
 </main>
 
 <script>
@@ -3939,6 +3757,12 @@ let inventoryGapChartInst = null;
 let dailyRowsCache = [];
 let dailySort = { key: 'sales', dir: 'desc', type: 'num' };
 
+// Justification ranking state
+let jState = { initialized: false, ranking: [], byArea: [], byMonth: [], summary: {} };
+let jStoreRankChartInst = null;
+let jAreaChartInst = null;
+let jTrendChartInst = null;
+
 // Monthly tab state
 let mBarChartInst = null;
 let mLineChartInst = null;
@@ -3963,11 +3787,8 @@ function switchTab(tab) {
   if (tab === 'gaps' && !gState.initialized) {
     initGapsTab();
   }
-  if (tab === 'notes' && !nState.initialized) {
-    initNotesTab();
-  }
-  if (tab === 'issues' && !iState.initialized) {
-    initIssuesTab();
+  if (tab === 'justification' && !jState.initialized) {
+    initJustificationTab();
   }
   setTimeout(recolorExistingCharts, 50);
 }
@@ -4558,6 +4379,185 @@ function renderWithoutJustification(rows, hasDateFilter) {
   }).join('');
 }
 
+function populateJStores(stores) {
+  const sel = document.getElementById('jStoreFilter');
+  if (!sel) return;
+  sel.innerHTML = '<option value="ALL">All Stores</option>';
+  (stores || []).forEach(s => {
+    const o = document.createElement('option');
+    o.value = o.textContent = s;
+    sel.appendChild(o);
+  });
+}
+
+async function initJustificationTab() {
+  try {
+    const monthJson = await apiJson('/api/months');
+    const monthSel = document.getElementById('jMonthFilter');
+    if (monthSel) {
+      monthSel.innerHTML = '<option value="ALL">All Months</option>';
+      (monthJson.months || []).forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.value;
+        o.textContent = m.label;
+        monthSel.appendChild(o);
+      });
+    }
+    const areaSel = document.getElementById('jAreaFilter');
+    if (areaSel) {
+      areaSel.innerHTML = '<option value="ALL">All Areas</option>';
+      (allFilters.areas || []).forEach(a => {
+        const o = document.createElement('option');
+        o.value = o.textContent = a;
+        areaSel.appendChild(o);
+      });
+    }
+    populateJStores(allFilters.stores || []);
+    jState.initialized = true;
+    await applyJustificationFilters();
+  } catch (e) {
+    console.error('Justification init error:', e);
+    const body = document.getElementById('jRankingBody');
+    if (body) body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+  }
+}
+
+async function onJAreaChange() {
+  const area = document.getElementById('jAreaFilter').value;
+  if (area === 'ALL') populateJStores(allFilters.stores || []);
+  else {
+    try {
+      const json = await apiJson('/api/filters?area=' + encodeURIComponent(area));
+      populateJStores(json.stores || []);
+    } catch (e) {}
+  }
+  document.getElementById('jStoreFilter').value = 'ALL';
+  await applyJustificationFilters();
+}
+
+async function applyJustificationFilters() {
+  const month = document.getElementById('jMonthFilter').value;
+  const area = document.getElementById('jAreaFilter').value;
+  const store = document.getElementById('jStoreFilter').value;
+  const params = new URLSearchParams();
+  if (month !== 'ALL') params.set('month', month);
+  if (area !== 'ALL') params.set('area', area);
+  if (store !== 'ALL') params.set('store', store);
+  try {
+    const json = await apiJson('/api/justification-ranking?' + params.toString());
+    jState.ranking = json.ranking || [];
+    jState.byArea = json.byArea || [];
+    jState.byMonth = json.byMonth || [];
+    jState.summary = json.summary || {};
+    renderJustificationKpis();
+    renderJustificationCharts();
+    renderJustificationTable();
+    const parts = [];
+    if (month !== 'ALL') parts.push(selectedOptionText('jMonthFilter'));
+    if (area !== 'ALL') parts.push(area);
+    if (store !== 'ALL') parts.push(store);
+    const label = parts.length ? parts.join(' - ') : 'All months';
+    const rc = document.getElementById('jRecordsCount');
+    if (rc) rc.innerHTML = '<span>' + (jState.summary.totalInstances || 0).toLocaleString('en-PH') + '</span> instances - <span>' + (jState.summary.affectedStores || 0).toLocaleString('en-PH') + '</span> stores';
+    const ti = document.getElementById('jTableInfo');
+    if (ti) ti.textContent = label;
+  } catch (e) {
+    console.error(e);
+    const body = document.getElementById('jRankingBody');
+    if (body) body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-triangle-exclamation"></i></div><p>' + escHtml(e.message) + '</p></td></tr>';
+  }
+}
+
+function renderJustificationKpis() {
+  const s = jState.summary || {};
+  const top = s.worstStore || null;
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  set('jKpiInstances', Number(s.totalInstances || 0).toLocaleString('en-PH'));
+  set('jKpiStores', Number(s.affectedStores || 0).toLocaleString('en-PH'));
+  set('jKpiDeclined', Number(s.declineCount || 0).toLocaleString('en-PH'));
+  set('jKpiGrowth', Number(s.growthCount || 0).toLocaleString('en-PH'));
+  set('jKpiTop', top ? clientProperCase(top.storeName || '-') : '-');
+  set('jKpiTopSub', top ? (top.instances + ' instance' + (top.instances !== 1 ? 's' : '')) : 'highest count');
+}
+
+function renderJustificationCharts() {
+  const palette = chartPalette();
+  const topStores = (jState.ranking || []).slice(0, IS_MOBILE ? 8 : 15);
+  const storeWrap = document.getElementById('jStoreRankChartWrap');
+  if (storeWrap) storeWrap.style.height = Math.max(320, topStores.length * 34 + 90) + 'px';
+  if (jStoreRankChartInst) jStoreRankChartInst.destroy();
+  const storeCanvas = document.getElementById('jStoreRankChart');
+  if (storeCanvas) {
+    jStoreRankChartInst = new Chart(storeCanvas, {
+      type: 'bar',
+      data: {
+        labels: topStores.map(r => clientProperCase(r.storeName || '-')),
+        datasets: [
+          { label: 'Declined', data: topStores.map(r => r.declineCount || 0), backgroundColor: 'rgba(244,63,94,0.86)', borderRadius: 6, stack: 'x' },
+          { label: 'Growth 20%+', data: topStores.map(r => r.growthCount || 0), backgroundColor: 'rgba(16,185,129,0.86)', borderRadius: 6, stack: 'x' }
+        ]
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: palette.muted } }, tooltip: { backgroundColor: palette.tooltipBg, borderColor: palette.tooltipBorder, borderWidth: 1, titleColor: palette.strong, bodyColor: palette.muted } },
+        scales: { x: { stacked: true, grid: { color: palette.grid }, ticks: { color: palette.muted, precision: 0 } }, y: { stacked: true, grid: { display: false }, ticks: { color: palette.muted } } }
+      }
+    });
+  }
+
+  if (jAreaChartInst) jAreaChartInst.destroy();
+  const areaCanvas = document.getElementById('jAreaChart');
+  const areaRows = jState.byArea || [];
+  if (areaCanvas) {
+    jAreaChartInst = new Chart(areaCanvas, {
+      type: 'doughnut',
+      data: { labels: areaRows.map(r => r.area), datasets: [{ data: areaRows.map(r => r.instances), backgroundColor: areaRows.map(r => AREA_COLORS[r.area] || DEFAULT_COLOR), borderColor: 'rgba(10,14,26,0.8)', borderWidth: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: { legend: { position: 'bottom', labels: { color: palette.muted } }, tooltip: { backgroundColor: palette.tooltipBg, borderColor: palette.tooltipBorder, borderWidth: 1, titleColor: palette.strong, bodyColor: palette.muted } } }
+    });
+  }
+
+  if (jTrendChartInst) jTrendChartInst.destroy();
+  const trendCanvas = document.getElementById('jTrendChart');
+  const monthRows = jState.byMonth || [];
+  if (trendCanvas) {
+    jTrendChartInst = new Chart(trendCanvas, {
+      type: 'line',
+      data: { labels: monthRows.map(r => r.month), datasets: [
+        { label: 'Total Instances', data: monthRows.map(r => r.instances), borderColor: '#818cf8', backgroundColor: 'rgba(99,102,241,0.15)', fill: true, tension: 0.35 },
+        { label: 'Declined', data: monthRows.map(r => r.declineCount), borderColor: '#fb7185', backgroundColor: 'rgba(244,63,94,0.12)', tension: 0.35 },
+        { label: 'Growth 20%+', data: monthRows.map(r => r.growthCount), borderColor: '#34d399', backgroundColor: 'rgba(16,185,129,0.12)', tension: 0.35 }
+      ] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: palette.muted } }, tooltip: { backgroundColor: palette.tooltipBg, borderColor: palette.tooltipBorder, borderWidth: 1, titleColor: palette.strong, bodyColor: palette.muted } }, scales: { x: { grid: { color: palette.gridSoft }, ticks: { color: palette.muted } }, y: { beginAtZero: true, grid: { color: palette.grid }, ticks: { color: palette.muted, precision: 0 } } } }
+    });
+  }
+}
+
+function renderJustificationTable() {
+  const body = document.getElementById('jRankingBody');
+  if (!body) return;
+  const rows = jState.ranking || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="10" class="empty-cell"><div class="empty-icon"><i class="fa fa-circle-check"></i></div><p>No missing justifications found</p><small>All stores passed the standard parameters for the selected filters</small></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((r, idx) => {
+    const color = AREA_COLORS[r.area] || DEFAULT_COLOR;
+    const diffCls = Number(r.diffPct || 0) >= 0 ? 'up' : 'down';
+    const latest = r.latestDate ? new Date(r.latestDate + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+    return '<tr>' +
+      '<td style="text-align:center"><span class="num num-bold" style="color:var(--text-1)">' + (idx + 1) + '</span></td>' +
+      '<td><div class="store-cell"><div class="store-avatar" style="background:' + color + '">' + initials(r.storeName) + '</div><div class="store-info"><div class="store-name">' + escHtml(clientProperCase(r.storeName || '-')) + '</div><div class="store-id">#' + escHtml(r.storeId || '-') + '</div></div></div></td>' +
+      '<td><span class="area-tag"><span class="area-dot" style="background:' + color + ';color:' + color + '"></span>' + escHtml(r.area || '-') + '</span></td>' +
+      '<td style="text-align:center"><span class="pill down">' + Number(r.instances || 0).toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:center"><span class="num" style="color:#fb7185">' + Number(r.declineCount || 0).toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:center"><span class="num" style="color:#34d399">' + Number(r.growthCount || 0).toLocaleString('en-PH') + '</span></td>' +
+      '<td style="text-align:right"><span class="num num-bold" style="color:var(--text-1)">' + fmtFull(r.sales || 0) + '</span></td>' +
+      '<td style="text-align:right"><span class="num" style="color:var(--text-3)">' + fmtFull(r.salesLY || 0) + '</span></td>' +
+      '<td style="text-align:center"><span class="pill ' + diffCls + '">' + (Number(r.diffPct || 0) >= 0 ? '+' : '') + Number(r.diffPct || 0).toFixed(2) + '%</span></td>' +
+      '<td><span class="timestamp-cell">' + latest + '</span></td>' +
+    '</tr>';
+  }).join('');
+}
 //  MONTHLY TAB 
 async function initMonthlyTab() {
   try {

@@ -4553,10 +4553,10 @@ function renderJustificationCharts() {
 
 function justificationRating(missingDays) {
   const days = Number(missingDays || 0);
-  if (days === 0) return { label: 'Fully Compliant', cls: 'up', color: '#047857', bg: '#d1fae5' };
-  if (days <= 2) return { label: 'Minor Gap', cls: 'flat', color: '#0e7490', bg: '#cffafe' };
-  if (days <= 5) return { label: 'Needs Attention', cls: 'warn', color: '#b45309', bg: '#fef3c7' };
-  if (days <= 15) return { label: 'Critical', cls: 'down', color: '#be123c', bg: '#ffe4e6' };
+  if (days === 0) return { label: 'Full Compliant', cls: 'up', color: '#047857', bg: '#d1fae5' };
+  if (days <= 10) return { label: 'Minor Gap', cls: 'flat', color: '#0e7490', bg: '#cffafe' };
+  if (days <= 30) return { label: 'Needs Attention', cls: 'warn', color: '#b45309', bg: '#fef3c7' };
+  if (days <= 49) return { label: 'Critical', cls: 'down', color: '#be123c', bg: '#ffe4e6' };
   return { label: 'Severely Non-Compliant', cls: 'down', color: '#991b1b', bg: '#fee2e2' };
 }
 
@@ -4726,7 +4726,7 @@ function exportJustificationRankingImage() {
   ctx.fillStyle = '#64748b';
   ctx.font = '600 16px Arial';
   ctx.textAlign = 'left';
-  ctx.fillText('Generated ' + new Date().toLocaleString('en-PH') + ' | Rating: 0 Fully Compliant, 1-2 Minor Gap, 3-5 Needs Attention, 6-15 Critical, 16+ Severely Non-Compliant.', margin, height - 28);
+  ctx.fillText('Generated ' + new Date().toLocaleString('en-PH') + ' | Rating: 0 Full Compliant, 1-10 Minor Gap, 11-30 Needs Attention, 31-49 Critical, 50+ Severely Non-Compliant.', margin, height - 28);
 
   const link = document.createElement('a');
   link.download = 'CaMaNaVa_Justification_Ranking_' + issueExportDateTag() + '.png';

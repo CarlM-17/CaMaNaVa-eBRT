@@ -4553,10 +4553,11 @@ function renderJustificationCharts() {
 
 function justificationRating(missingDays) {
   const days = Number(missingDays || 0);
-  if (days === 0) return { label: 'Very Good', cls: 'up', color: '#047857', bg: '#d1fae5' };
-  if (days <= 2) return { label: 'Good', cls: 'flat', color: '#0e7490', bg: '#cffafe' };
-  if (days <= 5) return { label: 'Poor', cls: 'warn', color: '#b45309', bg: '#fef3c7' };
-  return { label: 'Worst', cls: 'down', color: '#be123c', bg: '#ffe4e6' };
+  if (days === 0) return { label: 'Fully Compliant', cls: 'up', color: '#047857', bg: '#d1fae5' };
+  if (days <= 2) return { label: 'Minor Gap', cls: 'flat', color: '#0e7490', bg: '#cffafe' };
+  if (days <= 5) return { label: 'Needs Attention', cls: 'warn', color: '#b45309', bg: '#fef3c7' };
+  if (days <= 15) return { label: 'Critical', cls: 'down', color: '#be123c', bg: '#ffe4e6' };
+  return { label: 'Severely Non-Compliant', cls: 'down', color: '#991b1b', bg: '#fee2e2' };
 }
 
 function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight) {
@@ -4674,11 +4675,11 @@ function exportJustificationRankingImage() {
   });
 
   const cols = [
-    { label: 'Store', x: margin, w: 570, align: 'left' },
-    { label: 'No. of Days', x: margin + 590, w: 170, align: 'center' },
-    { label: 'No. Declined No Justification', x: margin + 780, w: 280, align: 'center' },
-    { label: 'No. Growth 20% No Justification', x: margin + 1080, w: 310, align: 'center' },
-    { label: 'Rating', x: margin + 1410, w: 135, align: 'center' }
+    { label: 'Store', x: margin, w: 500, align: 'left' },
+    { label: 'No. of Days', x: margin + 520, w: 150, align: 'center' },
+    { label: 'No. Declined No Justification', x: margin + 690, w: 270, align: 'center' },
+    { label: 'No. Growth 20% No Justification', x: margin + 980, w: 300, align: 'center' },
+    { label: 'Rating', x: margin + 1300, w: 245, align: 'center' }
   ];
   let y = headerH;
   ctx.fillStyle = '#166534';
@@ -4725,7 +4726,7 @@ function exportJustificationRankingImage() {
   ctx.fillStyle = '#64748b';
   ctx.font = '600 16px Arial';
   ctx.textAlign = 'left';
-  ctx.fillText('Generated ' + new Date().toLocaleString('en-PH') + ' | Very Good: 0 days, Good: 1-2, Poor: 3-5, Worst: 6+.', margin, height - 28);
+  ctx.fillText('Generated ' + new Date().toLocaleString('en-PH') + ' | Rating: 0 Fully Compliant, 1-2 Minor Gap, 3-5 Needs Attention, 6-15 Critical, 16+ Severely Non-Compliant.', margin, height - 28);
 
   const link = document.createElement('a');
   link.download = 'CaMaNaVa_Justification_Ranking_' + issueExportDateTag() + '.png';
